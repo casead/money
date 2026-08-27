@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -27,65 +28,24 @@ var configuration = new ConfigurationBuilder()
     .Build();
 
 var host = Host.CreateDefaultBuilder(args)
-    .ConfigureAppConfiguration((context, config) =>
+    .ConfigureAppConfiguration((_, config) =>
     {
         config.Sources.Clear();
         config.AddConfiguration(configuration);
     })
-    .UseSerilog((context, services, cfg) => cfg
+    .UseSerilog((_, _, cfg) => cfg
         .ReadFrom.Configuration(configuration)
-        .ReadFrom.Services(services)
         .Enrich.FromLogContext()
         .WriteTo.Console()
         .WriteTo.File("logs/moneyrecord-.log", rollingInterval: RollingInterval.Day,
             retainedFileCountLimit: 30))
     .ConfigureWebHostDefaults(webBuilder =>
     {
-        webBuilder.Configure(app =>
+        webBuilder.ConfigureKestrel(options =>
         {
-            // TraceId into response + log scope for end-to-end correlation
-            app.Use(async (context, next) =>
-            {
-                var traceId = context.TraceIdentifier;
-                context.Items["TraceId"] = traceId;
-                context.Response.Headers["X-Trace-Id"] = traceId;
-                using (Serilog.Context.LogContext.PushProperty("TraceId", traceId))
-                {
-                    await next();
-                }
-            });
-
-            var env = app.ApplicationServices.GetRequiredService<IHostEnvironment>();
-            if (env.IsDevelopment())
-            {
-                app.UseSwagger();
-                app.UseSwaggerUI();
-            }
-
-            app.UseErrorHandling();
-            app.UseHttpsRedirection();
-            app.UseAuthentication();
-            app.UseRateLimiter();
-            app.UseAuthorization();
-            app.MapControllers();
-
-            app.MapHealthChecks("/health", new HealthCheckOptions
-            {
-                Predicate = _ => false
-            });
-            app.MapHealthChecks("/health/ready", new HealthCheckOptions
-            {
-                Predicate = check => check.Tags.Contains("ready")
-            });
-
-            if (env.IsDevelopment())
-            {
-                using var scope = app.Services.CreateScope();
-                MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
-                    .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
-            }
+            options.ListenAnyIP(8080, HttpProtocols.Http1AndHttp2);
         });
-        webBuilder.ConfigureServices((context, services) =>
+        webBuilder.ConfigureServices(services =>
         {
             // Layer registrations (Clean Architecture composition)
             services.AddApplication();
@@ -152,6 +112,53 @@ var host = Host.CreateDefaultBuilder(args)
             // Health checks
             services.AddHealthChecks()
                 .AddDbContextCheck<MoneyRecordDbContext>("database", tags: ["ready"]);
+        });
+        webBuilder.Configure(app =>
+        {
+            // TraceId into response + log scope for end-to-end correlation
+            app.Use(async (context, next) =>
+            {
+                var traceId = context.TraceIdentifier;
+                context.Items["TraceId"] = traceId;
+                context.Response.Headers["X-Trace-Id"] = traceId;
+                using (Serilog.Context.LogContext.PushProperty("TraceId", traceId))
+                {
+                    await next();
+                }
+            });
+
+            var env = app.ApplicationServices.GetRequiredService<IHostEnvironment>();
+            if (env.IsDevelopment())
+            {
+                app.UseSwagger();
+                app.UseSwaggerUI();
+            }
+
+            app.UseErrorHandling();
+            app.UseHttpsRedirection();
+            app.UseAuthentication();
+            app.UseRateLimiter();
+            app.UseAuthorization();
+
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllers();
+                endpoints.MapHealthChecks("/health", new HealthCheckOptions
+                {
+                    Predicate = _ => false
+                });
+                endpoints.MapHealthChecks("/health/ready", new HealthCheckOptions
+                {
+                    Predicate = check => check.Tags.Contains("ready")
+                });
+            });
+
+            if (env.IsDevelopment())
+            {
+                using var scope = app.Services.CreateScope();
+                MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
+                    .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
+            }
         });
     })
     .Build();
