@@ -16,6 +16,14 @@ using MoneyRecord.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Disable config file watching on Render free tier (inotify limit=128).
+// Config changes require a redeploy anyway.
+builder.Configuration.Sources.Clear();
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: false)
+    .AddEnvironmentVariables();
+
 // Serilog bootstrap (ARCH-006 §18): console + rolling file, traceId enrichment
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)

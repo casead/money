@@ -6,6 +6,10 @@ services:
     envVars:
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
+      - key: DOTNET_USE_POLLING_FILE_WATCHER
+        value: "1"
+      - key: ASPNETCORE_SUPPRESSSTATUSMESSAGES
+        value: "true"
       - key: ConnectionStrings__MoneyRecord
         sync: false
       - key: Jwt__SigningKey
