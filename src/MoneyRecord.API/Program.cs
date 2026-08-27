@@ -33,7 +33,7 @@ var host = Host.CreateDefaultBuilder(args)
         config.Sources.Clear();
         config.AddConfiguration(configuration);
     })
-    .UseSerilog((_, _, cfg) => cfg
+    .UseSerilog((context, services, loggerConfig) => loggerConfig
         .ReadFrom.Configuration(configuration)
         .Enrich.FromLogContext()
         .WriteTo.Console()
@@ -43,7 +43,7 @@ var host = Host.CreateDefaultBuilder(args)
     {
         webBuilder.ConfigureKestrel(options =>
         {
-            options.ListenAnyIP(8080, HttpProtocols.Http1AndHttp2);
+            options.ListenAnyIP(8080, o => o.Protocols = HttpProtocols.Http1AndHttp2);
         });
         webBuilder.ConfigureServices(services =>
         {
