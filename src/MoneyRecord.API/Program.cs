@@ -155,7 +155,7 @@ var host = Host.CreateDefaultBuilder(args)
                 });
             });
 
-            if (env.IsDevelopment())
+            // Seed admin on first run (checks if already exists)
             {
                 using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
                 MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
