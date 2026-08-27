@@ -4,5 +4,8 @@ obj/
 *.user
 logs/
 
+# Environment variables (secrets)
+.env
+
 # NuGet workspace-local cache (sandbox workaround)
 .nuget-packages/
