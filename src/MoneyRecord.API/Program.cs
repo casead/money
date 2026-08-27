@@ -14,15 +14,25 @@ using MoneyRecord.Infrastructure;
 using MoneyRecord.Infrastructure.Persistence;
 using MoneyRecord.Infrastructure.Security;
 
+// Build config WITHOUT file watchers (avoids inotify crash on Render free tier).
+var config = new ConfigurationBuilder()
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+    .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production"}.json",
+        optional: true, reloadOnChange: false)
+    .AddEnvironmentVariables()
+    .Build();
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Disable config file watching on Render free tier (inotify limit=128).
-// Config changes require a redeploy anyway.
+// Replace the default config (which has file watchers) with our watcher-free config.
 builder.Configuration.Sources.Clear();
-builder.Configuration
+foreach (var source in ((IConfigurationBuilder)new ConfigurationBuilder()
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: false)
-    .AddEnvironmentVariables();
+    .AddEnvironmentVariables()).Sources)
+{
+    builder.Configuration.Sources.Add(source);
+}
 
 // Serilog bootstrap (ARCH-006 §18): console + rolling file, traceId enrichment
 builder.Host.UseSerilog((context, services, configuration) => configuration
@@ -88,7 +98,6 @@ builder.Services.AddRateLimiter(options =>
             }));
     options.AddPolicy("txn-create", context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            // Requires auth to run BEFORE the limiter (see middleware order below).
             partitionKey: context.User.FindFirst("sub")?.Value
                           ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
             factory: _ => new FixedWindowRateLimiterOptions
