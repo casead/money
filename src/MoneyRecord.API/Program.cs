@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
+using Serilog.Context;
 using MoneyRecord.API.Services;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using MoneyRecord.API.Middleware;
@@ -155,7 +156,7 @@ var host = Host.CreateDefaultBuilder(args)
 
             if (env.IsDevelopment())
             {
-                using var scope = app.Services.CreateScope();
+                using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
                 MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
                     .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
             }
