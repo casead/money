@@ -1,0 +1,7 @@
+<Project>
+  <!-- Redirects NuGet away from blocked user-profile paths (sandbox-safe) -->
+  <PropertyGroup>
+    <RestoreConfigFile>$(MSBuildThisFileDirectory)nuget.config</RestoreConfigFile>
+    <RestorePackagesPath>$(MSBuildThisFileDirectory).nuget-packages</RestorePackagesPath>
+  </PropertyGroup>
+</Project>

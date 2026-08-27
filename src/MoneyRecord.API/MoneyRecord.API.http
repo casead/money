@@ -1,0 +1,6 @@
+@MoneyRecord.API_HostAddress = http://localhost:5098
+
+GET {{MoneyRecord.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
