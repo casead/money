@@ -137,6 +137,7 @@ var host = Host.CreateDefaultBuilder(args)
 
             app.UseErrorHandling();
             app.UseHttpsRedirection();
+            app.UseRouting();
             app.UseAuthentication();
             app.UseRateLimiter();
             app.UseAuthorization();
