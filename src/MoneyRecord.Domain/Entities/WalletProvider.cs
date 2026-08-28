@@ -34,8 +34,9 @@ public class WalletProvider
         IsActive = true;
     }
 
-    public void Update(string? name, string? logoUrl, int? displayOrder)
+    public void Update(string? code, string? name, string? logoUrl, int? displayOrder)
     {
+        if (code is not null) Code = code.Trim().ToUpperInvariant();
         if (name is not null) Name = name.Trim();
         if (logoUrl is not null) LogoUrl = logoUrl;
         if (displayOrder is not null) DisplayOrder = displayOrder.Value;

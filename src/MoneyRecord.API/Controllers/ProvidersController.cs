@@ -42,14 +42,14 @@ public class ProvidersController : ControllerBase
             new { data = result.Value });
     }
 
-    /// <summary>PRV-003 — update provider (code immutable).</summary>
+    /// <summary>PRV-003 — update provider.</summary>
     [HttpPut("{id:int}")]
     [Authorize(Policy = Permissions.ProviderManage)]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateProviderRequest body,
         CancellationToken ct)
     {
         var result = await _sender.Send(
-            new UpdateProviderCommand(id, body.Name, body.LogoUrl, body.DisplayOrder), ct);
+            new UpdateProviderCommand(id, body.Code, body.Name, body.LogoUrl, body.DisplayOrder), ct);
         return result.IsSuccess ? Ok(new { data = result.Value }) : Error(result);
     }
 
@@ -77,7 +77,7 @@ public class ProvidersController : ControllerBase
     public sealed record CreateProviderRequest(
         string Code, string Name, string? LogoUrl, int? DisplayOrder);
 
-    public sealed record UpdateProviderRequest(string? Name, string? LogoUrl, int? DisplayOrder);
+    public sealed record UpdateProviderRequest(string? Code, string? Name, string? LogoUrl, int? DisplayOrder);
 
     public sealed record StatusRequest(bool IsActive);
 }

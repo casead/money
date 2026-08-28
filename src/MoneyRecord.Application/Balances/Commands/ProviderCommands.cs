@@ -75,10 +75,11 @@ public sealed class CreateProviderCommandHandler
     }
 }
 
-// ---------- PRV-003 Update (code immutable) ----------
+// ---------- PRV-003 Update ----------
 
 public sealed record UpdateProviderCommand(
     int Id,
+    string? Code,
     string? Name,
     string? LogoUrl,
     int? DisplayOrder) : IRequest<Result<ProviderResponse>>, ICommand;
@@ -104,11 +105,21 @@ public sealed class UpdateProviderCommandHandler
             return Result<ProviderResponse>.Failure(ErrorCodes.NotFound,
                 "Provider ရှာမတွေ့ပါ။");
 
+        // Check duplicate code if changing
+        if (!string.IsNullOrWhiteSpace(request.Code))
+        {
+            var newCode = request.Code.Trim().ToUpperInvariant();
+            if (newCode != provider.Code &&
+                await _db.WalletProviders.AnyAsync(p => p.Code == newCode && !p.IsDeleted, ct))
+                return Result<ProviderResponse>.Failure(ErrorCodes.Duplicate,
+                    $"Provider code '{newCode}' ရှိပြီးသား ဖြစ်နေပါသည်။");
+        }
+
         var before = System.Text.Json.JsonSerializer.Serialize(
-            new { provider.Name, provider.LogoUrl, provider.DisplayOrder });
-        provider.Update(request.Name, request.LogoUrl, request.DisplayOrder);
+            new { provider.Code, provider.Name, provider.LogoUrl, provider.DisplayOrder });
+        provider.Update(request.Code, request.Name, request.LogoUrl, request.DisplayOrder);
         var after = System.Text.Json.JsonSerializer.Serialize(
-            new { provider.Name, provider.LogoUrl, provider.DisplayOrder });
+            new { provider.Code, provider.Name, provider.LogoUrl, provider.DisplayOrder });
 
         await _audit.LogAsync("PROVIDER.UPDATE", "WalletProvider",
             provider.Id.ToString(), before, after, ct: ct);
