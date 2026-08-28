@@ -34,17 +34,25 @@ var host = Host.CreateDefaultBuilder(args)
         config.Sources.Clear();
         config.AddConfiguration(configuration);
     })
-    .UseSerilog((context, services, loggerConfig) => loggerConfig
-        .ReadFrom.Configuration(configuration)
-        .Enrich.FromLogContext()
-        .WriteTo.Console()
-        .WriteTo.File("logs/moneyrecord-.log", rollingInterval: RollingInterval.Day,
-            retainedFileCountLimit: 30))
+    .UseSerilog((context, services, loggerConfig) =>
+    {
+        loggerConfig
+            .ReadFrom.Configuration(configuration)
+            .Enrich.FromLogContext()
+            .WriteTo.Console();
+        // File logging only outside Vercel (no persistent storage in containers)
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VERCEL")))
+        {
+            loggerConfig.WriteTo.File("logs/moneyrecord-.log",
+                rollingInterval: RollingInterval.Day, retainedFileCountLimit: 30);
+        }
+    })
     .ConfigureWebHostDefaults(webBuilder =>
     {
         webBuilder.ConfigureKestrel(options =>
         {
-            options.ListenAnyIP(8080, o => o.Protocols = HttpProtocols.Http1AndHttp2);
+            var port = int.Parse(Environment.GetEnvironmentVariable("PORT") ?? "8080");
+            options.ListenAnyIP(port, o => o.Protocols = HttpProtocols.Http1AndHttp2);
         });
         webBuilder.ConfigureServices(services =>
         {
