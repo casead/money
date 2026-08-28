@@ -72,25 +72,19 @@ public sealed class GetCashBalanceQueryHandler
         var cash = await _db.PhysicalCashAccounts.AsNoTracking()
             .FirstOrDefaultAsync(c => c.Id == _currentUser.ShopId, ct); // per-shop cash pool (M11)
 
-        // Batch: last entry + ledger sums in fewer round-trips.
         var cashBalance = cash?.CurrentCashBalance ?? 0;
-        var lastEntryTask = _db.CashLedgerEntries.AsNoTracking()
+        var lastEntry = await _db.CashLedgerEntries.AsNoTracking()
             .Where(e => _db.Users.Any(u => u.Id == e.CreatedByUserId
                                            && u.ShopId == _currentUser.ShopId))
             .OrderByDescending(e => e.Id)
             .Select(e => (DateTime?)e.CreatedAtUtc)
             .FirstOrDefaultAsync(ct);
 
-        var ledgerSumsTask = _db.CashLedgerEntries.AsNoTracking()
+        var ledgerSums = await _db.CashLedgerEntries.AsNoTracking()
             .Where(e => _db.Users.Any(u => u.Id == e.CreatedByUserId && u.ShopId == _currentUser.ShopId))
             .GroupBy(e => e.Direction)
             .Select(g => new { Direction = g.Key, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
-
-        await Task.WhenAll(lastEntryTask, ledgerSumsTask);
-
-        var lastEntry = await lastEntryTask;
-        var ledgerSums = await ledgerSumsTask;
 
         var inc = ledgerSums.Where(s => s.Direction == LedgerDirection.Increase)
             .Select(s => s.Total).FirstOrDefault();

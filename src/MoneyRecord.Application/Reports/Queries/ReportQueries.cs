@@ -102,15 +102,10 @@ public sealed class GetDashboardQueryHandler
             .Sum(t => t.Amount);
 
         // Low-balance warnings from settings thresholds (shop-scoped w/ global fallback)
-        var cashThresholdTask = SettingReader.EffectiveIntAsync(
+        var cashThreshold = await SettingReader.EffectiveIntAsync(
             _db, "lowBalanceCashThreshold", _currentUser.ShopId, ct);
-        var floatThresholdTask = SettingReader.EffectiveIntAsync(
+        var floatThreshold = await SettingReader.EffectiveIntAsync(
             _db, "lowBalanceFloatThresholdPerAccount", _currentUser.ShopId, ct);
-
-        await Task.WhenAll(cashThresholdTask, floatThresholdTask);
-
-        var cashThreshold = await cashThresholdTask;
-        var floatThreshold = await floatThresholdTask;
 
         var warnings = new List<string>();
         var cashBalance = cash?.CurrentCashBalance ?? 0;
