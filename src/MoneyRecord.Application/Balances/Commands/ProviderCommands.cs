@@ -212,7 +212,7 @@ public sealed class DeleteProviderCommandHandler
         var hasAccounts = await _db.WalletAccounts
             .AnyAsync(a => a.WalletProviderId == provider.Id && !a.IsDeleted, ct);
         if (hasAccounts)
-            return Result.Failure(ErrorCodes.ValidationFailed,
+            return Result.Failure(ErrorCodes.ProviderHasAccounts,
                 "ဤ provider တွင် wallet account များ ရှိနေသေးသည်။ အရင်ဖျက်ပါ။");
 
         provider.Delete(_currentUser.UserId ?? 0);

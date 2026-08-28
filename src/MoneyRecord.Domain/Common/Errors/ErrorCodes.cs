@@ -27,4 +27,7 @@ public static class ErrorCodes
 
     // ---- Balances (API-007 BAL-003 / BR-034) ----
     public const string InsufficientForDecrease = "INSUFFICIENT_FOR_DECREASE";
+
+    // ---- Provider management (PRV-*) ----
+    public const string ProviderHasAccounts = "PROVIDER_HAS_ACCOUNTS";
 }
