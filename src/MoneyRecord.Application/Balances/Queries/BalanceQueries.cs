@@ -72,18 +72,35 @@ public sealed class GetCashBalanceQueryHandler
         var cash = await _db.PhysicalCashAccounts.AsNoTracking()
             .FirstOrDefaultAsync(c => c.Id == _currentUser.ShopId, ct); // per-shop cash pool (M11)
 
-        var lastEntry = await _db.CashLedgerEntries.AsNoTracking()
+        // Batch: last entry + ledger sums in fewer round-trips.
+        var cashBalance = cash?.CurrentCashBalance ?? 0;
+        var lastEntryTask = _db.CashLedgerEntries.AsNoTracking()
             .Where(e => _db.Users.Any(u => u.Id == e.CreatedByUserId
                                            && u.ShopId == _currentUser.ShopId))
             .OrderByDescending(e => e.Id)
             .Select(e => (DateTime?)e.CreatedAtUtc)
             .FirstOrDefaultAsync(ct);
 
-        var (_, flag) = await BalanceIntegrity.ComputeCashAsync(
-            _db, cash?.CurrentCashBalance ?? 0, _currentUser.ShopId, ct);
+        var ledgerSumsTask = _db.CashLedgerEntries.AsNoTracking()
+            .Where(e => _db.Users.Any(u => u.Id == e.CreatedByUserId && u.ShopId == _currentUser.ShopId))
+            .GroupBy(e => e.Direction)
+            .Select(g => new { Direction = g.Key, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct);
+
+        await Task.WhenAll(lastEntryTask, ledgerSumsTask);
+
+        var lastEntry = await lastEntryTask;
+        var ledgerSums = await ledgerSumsTask;
+
+        var inc = ledgerSums.Where(s => s.Direction == LedgerDirection.Increase)
+            .Select(s => s.Total).FirstOrDefault();
+        var dec = ledgerSums.Where(s => s.Direction == LedgerDirection.Decrease)
+            .Select(s => s.Total).FirstOrDefault();
+        var ledgerSum = IntegrityCheck.SignedSum(inc, dec);
+        var flag = IntegrityCheck.Flag(cashBalance, ledgerSum);
 
         return Result<CashBalanceResponse>.Success(new CashBalanceResponse(
-            cash?.CurrentCashBalance ?? 0, lastEntry, cash?.LastReconciledAtUtc, flag));
+            cashBalance, lastEntry, cash?.LastReconciledAtUtc, flag));
     }
 }
 
@@ -130,11 +147,37 @@ public sealed class GetWalletBalancesQueryHandler
             })
             .ToListAsync(ct);
 
+        // Batch integrity: fetch all ledger sums in one query instead of N+1.
+        var accountIds = accounts.Select(a => a.Id).ToList();
+        var ledgerSums = await _db.WalletLedgerEntries.AsNoTracking()
+            .Where(e => accountIds.Contains(e.WalletAccountId))
+            .GroupBy(e => new { e.WalletAccountId, e.Direction })
+            .Select(g => new
+            {
+                g.Key.WalletAccountId,
+                Direction = g.Key.Direction,
+                Total = g.Sum(e => e.Amount)
+            })
+            .ToListAsync(ct);
+
+        var ledgerMap = new Dictionary<long, (long Inc, long Dec)>();
+        foreach (var row in ledgerSums)
+        {
+            if (!ledgerMap.TryGetValue(row.WalletAccountId, out var acc))
+                acc = (0, 0);
+            if (row.Direction == LedgerDirection.Increase)
+                acc = (row.Total, acc.Dec);
+            else
+                acc = (acc.Inc, row.Total);
+            ledgerMap[row.WalletAccountId] = acc;
+        }
+
         var items = new List<WalletBalanceItem>(accounts.Count);
         foreach (var a in accounts)
         {
-            var (_, flag) = await BalanceIntegrity.ComputeWalletAsync(
-                _db, a.Id, a.CurrentFloatBalance, ct);
+            var (inc, dec) = ledgerMap.TryGetValue(a.Id, out var v) ? v : (0L, 0L);
+            var ledgerSum = IntegrityCheck.SignedSum(inc, dec);
+            var flag = IntegrityCheck.Flag(a.CurrentFloatBalance, ledgerSum);
             items.Add(new WalletBalanceItem(
                 a.Id, a.ProviderCode,
                 CreateWalletAccountCommandHandler.Mask(a.AccountNumber),
