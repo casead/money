@@ -206,27 +206,14 @@ public abstract class CreateTxnHandlerBase<TCommand>
                 account.Id, txn.Id, LedgerDirection.Increase, feeAmount,
                 lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
 
-        // ---- Duplicate soft-warning (BR-030, non-blocking hint) —
-        //      moved to background so it doesn't block the critical path. ----
-        var txnForBg = txn;
-        var phoneForBg = phone;
-        var requestAmountForBg = request.Amount;
-        var typeForBg = Type;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                using var scope = _db as IDisposable ?? throw new InvalidOperationException();
-                var windowStart = _clock.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
-                await _db.Transactions.AsNoTracking()
-                    .AnyAsync(t => t.CustomerPhoneSnapshot == phoneForBg &&
-                                   t.Amount == requestAmountForBg &&
-                                   t.Type == typeForBg &&
-                                   t.Status == TransactionStatus.Completed &&
-                                   t.OccurredAtUtc >= windowStart);
-            }
-            catch { /* best-effort */ }
-        });
+        // ---- Duplicate soft-warning (BR-030, non-blocking hint) ----
+        var windowStart = _clock.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
+        var duplicateWarning = await _db.Transactions.AsNoTracking()
+            .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
+                           t.Amount == request.Amount &&
+                           t.Type == Type &&
+                           t.Status == TransactionStatus.Completed &&
+                           t.OccurredAtUtc >= windowStart, ct);
 
         // ---- Audit inside the same business txn (non-negotiable #4) ----
         await _audit.LogAsync(ActionCode, "Transaction", txn.TxnNo,
@@ -248,19 +235,10 @@ public abstract class CreateTxnHandlerBase<TCommand>
 
         // ---- Receipt payload + idempotency completion ----
         var receipt = BuildReceipt(txn, lockedCash.CurrentCashBalance,
-            lockedWallet.CurrentFloatBalance, false, isAdmin, isReplay: false);
+            lockedWallet.CurrentFloatBalance, duplicateWarning, isAdmin, isReplay: false);
 
-        // Idempotency completion moved to background — receipt is already built
-        // and will be returned regardless. This saves one DB roundtrip on the
-        // critical path.
-        var keyForBg = request.IdempotencyKey;
-        var receiptJson = JsonSerializer.Serialize(receipt);
-        var bgCt = CancellationToken.None;
-        _ = Task.Run(async () =>
-        {
-            try { await _idempotency.CompleteAsync(keyForBg, receiptJson, bgCt); }
-            catch { /* best-effort */ }
-        });
+        await _idempotency.CompleteAsync(
+            request.IdempotencyKey, JsonSerializer.Serialize(receipt), ct);
 
         return Result<TxnReceiptResponse>.Success(receipt);
     }
