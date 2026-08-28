@@ -9,7 +9,7 @@ using MoneyRecord.Domain.Common.Rbac;
 
 namespace MoneyRecord.API.Controllers;
 
-/// <summary>PRV-001â€¦004 (API-007 Â§5). Reads: A+S; writes: provider.manage (Admin).</summary>
+/// <summary>PRV-001...005 (API-007 §5). Reads: A+S; writes: provider.manage (Admin).</summary>
 [ApiController]
 [Route("providers")]
 public class ProvidersController : ControllerBase
@@ -18,7 +18,7 @@ public class ProvidersController : ControllerBase
 
     public ProvidersController(ISender sender) => _sender = sender;
 
-    /// <summary>PRV-001 â€” list providers w/ account counts + total float.</summary>
+    /// <summary>PRV-001 — list providers w/ account counts + total float.</summary>
     [HttpGet]
     [Authorize]
     public async Task<IActionResult> List([FromQuery] bool includeInactive = false,
@@ -28,7 +28,7 @@ public class ProvidersController : ControllerBase
         return result.IsSuccess ? Ok(new { data = result.Value }) : Error(result);
     }
 
-    /// <summary>PRV-002 â€” create provider (provider.manage). Audit PROVIDER.CREATE.</summary>
+    /// <summary>PRV-002 — create provider (provider.manage). Audit PROVIDER.CREATE.</summary>
     [HttpPost]
     [Authorize(Policy = Permissions.ProviderManage)]
     public async Task<IActionResult> Create([FromBody] CreateProviderRequest body,
@@ -42,7 +42,7 @@ public class ProvidersController : ControllerBase
             new { data = result.Value });
     }
 
-    /// <summary>PRV-003 â€” update provider (code immutable).</summary>
+    /// <summary>PRV-003 — update provider (code immutable).</summary>
     [HttpPut("{id:int}")]
     [Authorize(Policy = Permissions.ProviderManage)]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateProviderRequest body,
@@ -53,7 +53,7 @@ public class ProvidersController : ControllerBase
         return result.IsSuccess ? Ok(new { data = result.Value }) : Error(result);
     }
 
-    /// <summary>PRV-004 â€” activate/deactivate (blocks new txns when inactive).</summary>
+    /// <summary>PRV-004 — activate/deactivate (blocks new txns when inactive).</summary>
     [HttpPatch("{id:int}/status")]
     [Authorize(Policy = Permissions.ProviderManage)]
     public async Task<IActionResult> SetStatus(int id, [FromBody] StatusRequest body,
@@ -61,6 +61,15 @@ public class ProvidersController : ControllerBase
     {
         var result = await _sender.Send(new SetProviderStatusCommand(id, body.IsActive), ct);
         return result.IsSuccess ? Ok(new { data = result.Value }) : Error(result);
+    }
+
+    /// <summary>PRV-005 — soft-delete provider (must have no accounts).</summary>
+    [HttpDelete("{id:int}")]
+    [Authorize(Policy = Permissions.ProviderManage)]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    {
+        var result = await _sender.Send(new DeleteProviderCommand(id), ct);
+        return result.IsSuccess ? Ok() : Error(result);
     }
 
     private ActionResult Error(Result result) => ApiProblem.From(result, HttpContext);
@@ -72,5 +81,3 @@ public class ProvidersController : ControllerBase
 
     public sealed record StatusRequest(bool IsActive);
 }
-
-

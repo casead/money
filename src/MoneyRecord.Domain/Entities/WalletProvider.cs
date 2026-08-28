@@ -42,4 +42,9 @@ public class WalletProvider
     }
 
     public void SetActive(bool isActive) => IsActive = isActive;
+
+    public void Delete(long userId)
+    {
+        IsDeleted = true;
+    }
 }

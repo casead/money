@@ -172,3 +172,55 @@ public sealed class SetProviderStatusCommandHandler
             await UpdateProviderCommandHandler.ProjectAsync(_db, provider, ct));
     }
 }
+
+// ---------- PRV-005 Delete (soft-delete, Admin-only) ----------
+
+public sealed record DeleteProviderCommand(int Id)
+    : IRequest<Result>, ICommand;
+
+public sealed class DeleteProviderCommandValidator : AbstractValidator<DeleteProviderCommand>
+{
+    public DeleteProviderCommandValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class DeleteProviderCommandHandler
+    : IRequestHandler<DeleteProviderCommand, Result>
+{
+    private readonly IMoneyRecordDbContext _db;
+    private readonly IAuditLogger _audit;
+    private readonly ICurrentUser _currentUser;
+
+    public DeleteProviderCommandHandler(IMoneyRecordDbContext db, IAuditLogger audit,
+        ICurrentUser currentUser)
+    {
+        _db = db;
+        _audit = audit;
+        _currentUser = currentUser;
+    }
+
+    public async Task<Result> Handle(DeleteProviderCommand request, CancellationToken ct)
+    {
+        var provider = await _db.WalletProviders
+            .FirstOrDefaultAsync(p => p.Id == request.Id && !p.IsDeleted, ct);
+        if (provider is null)
+            return Result.Failure(ErrorCodes.NotFound, "Provider ရှာမတွေ့ပါ။");
+
+        // Block delete if provider has active wallet accounts.
+        var hasAccounts = await _db.WalletAccounts
+            .AnyAsync(a => a.WalletProviderId == provider.Id && !a.IsDeleted, ct);
+        if (hasAccounts)
+            return Result.Failure(ErrorCodes.ValidationFailed,
+                "ဤ provider တွင် wallet account များ ရှိနေသေးသည်။ အရင်ဖျက်ပါ။");
+
+        provider.Delete(_currentUser.UserId ?? 0);
+        await _audit.LogAsync("PROVIDER.DELETE", "WalletProvider",
+            provider.Id.ToString(),
+            newValue: System.Text.Json.JsonSerializer.Serialize(new { provider.Id, provider.Code }),
+            ct: ct);
+        await _db.SaveChangesAsync(ct);
+        return Result.Success();
+    }
+}
