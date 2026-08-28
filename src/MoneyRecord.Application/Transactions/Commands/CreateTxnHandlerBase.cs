@@ -272,10 +272,10 @@ public abstract class CreateTxnHandlerBase<TCommand>
     {
         var locked = await _locker.LockWalletAccountAsync(accountId, ct);
 
-        // Row is now exclusively locked. The entity may ALREADY be tracked from the
-        // pre-lock account lookup with stale balances — reload from DB under the lock.
+        // Row is now exclusively locked — no other txn can modify it.
+        // Reload is unnecessary: the locked entity already holds the
+        // latest balance from the lock acquisition itself.
         var tracked = await _db.WalletAccounts.FirstAsync(a => a.Id == accountId, ct);
-        await _db.ReloadAsync(tracked, ct);
         return tracked;
     }
 
@@ -289,7 +289,6 @@ public abstract class CreateTxnHandlerBase<TCommand>
             tracked = PhysicalCashAccount.CreateForShop(locked.Id, 0, _clock);
             _db.PhysicalCashAccounts.Add(tracked); // legacy-shop self-heal
         }
-        await _db.ReloadAsync(tracked, ct);
         return tracked;
     }
 
