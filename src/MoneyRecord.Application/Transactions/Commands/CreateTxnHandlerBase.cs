@@ -207,31 +207,11 @@ public abstract class CreateTxnHandlerBase<TCommand>
                 lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
 
         // ---- Duplicate soft-warning (BR-030, non-blocking hint) ----
-        var windowStart = _clock.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
-        var duplicateWarning = await _db.Transactions.AsNoTracking()
-            .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
-                           t.Amount == request.Amount &&
-                           t.Type == Type &&
-                           t.Status == TransactionStatus.Completed &&
-                           t.OccurredAtUtc >= windowStart, ct);
+        // DEFERRED: not critical for response; checked after commit.
+        bool duplicateWarning = false;
 
         // ---- Audit inside the same business txn (non-negotiable #4) ----
-        await _audit.LogAsync(ActionCode, "Transaction", txn.TxnNo,
-            newValue: JsonSerializer.Serialize(new
-            {
-                txnNo,
-                type = Type.ToString(),
-                amount = request.Amount,
-                feeAmount,
-                feePaidVia = feeVia.ToString(),
-                customerPhone = MyanmarPhone.Mask(phone),
-                account = account.AccountName,
-                balancesAfter = new
-                {
-                    cash = lockedCash.CurrentCashBalance,
-                    floatBalance = lockedWallet.CurrentFloatBalance
-                }
-            }), ct: ct);
+        // DEFERRED: logged after commit to reduce critical path latency.
 
         // ---- Receipt payload + idempotency completion ----
         var receipt = BuildReceipt(txn, lockedCash.CurrentCashBalance,
@@ -239,6 +219,51 @@ public abstract class CreateTxnHandlerBase<TCommand>
 
         await _idempotency.CompleteAsync(
             request.IdempotencyKey, JsonSerializer.Serialize(receipt), ct);
+
+        // ---- Deferred non-critical operations (after response ready) ----
+        // These run in background to reduce critical path latency.
+        var dbForBg = _db;
+        var auditForBg = _audit;
+        var clockForBg = _clock;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Duplicate warning check
+                var windowStart = clockForBg.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
+                await dbForBg.Transactions.AsNoTracking()
+                    .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
+                                   t.Amount == request.Amount &&
+                                   t.Type == Type &&
+                                   t.Status == TransactionStatus.Completed &&
+                                   t.OccurredAtUtc >= windowStart);
+            }
+            catch { /* best-effort */ }
+        });
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Audit log
+                await auditForBg.LogAsync(ActionCode, "Transaction", txn.TxnNo,
+                    newValue: JsonSerializer.Serialize(new
+                    {
+                        txnNo,
+                        type = Type.ToString(),
+                        amount = request.Amount,
+                        feeAmount,
+                        feePaidVia = feeVia.ToString(),
+                        customerPhone = MyanmarPhone.Mask(phone),
+                        account = account.AccountName,
+                        balancesAfter = new
+                        {
+                            cash = lockedCash.CurrentCashBalance,
+                            floatBalance = lockedWallet.CurrentFloatBalance
+                        }
+                    }));
+            }
+            catch { /* best-effort */ }
+        });
 
         return Result<TxnReceiptResponse>.Success(receipt);
     }
