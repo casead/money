@@ -76,9 +76,11 @@ public sealed class CreateWalletAccountCommandHandler
 
         if (!string.IsNullOrWhiteSpace(request.AccountNumber) &&
             await _db.WalletAccounts.AnyAsync(a =>
-                a.AccountNumber == request.AccountNumber.Trim(), ct))
+                a.WalletProviderId == request.ProviderId &&
+                a.AccountNumber == request.AccountNumber.Trim() &&
+                !a.IsDeleted, ct))
             return Result<WalletAccountResponse>.Failure(
-                ErrorCodes.Duplicate, "ဤ Account Number ဖြင့် account ရှိပြီးသား ဖြစ်နေပါသည်။");
+                ErrorCodes.Duplicate, "ဤ Provider ထဲတွင် ဤ Account Number ဖြင့် account ရှိပြီးသား ဖြစ်နေပါသည်။");
 
         var account = WalletAccount.Create(
             request.ProviderId, request.AccountName, request.AccountNumber,
