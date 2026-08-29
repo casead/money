@@ -117,13 +117,9 @@ public abstract class CreateTxnHandlerBase<TCommand>
         floatBefore = lockedWallet.CurrentFloatBalance;
 
         // ---- Fee resolution (M9, BR-012/013): auto-calc from effective-dated rule;
-        //      Admin may override with reason. Snapshot stored on the txn row.
-        //      Resolved BEFORE sufficiency guards — fee rides on the wallet side
-        //      when paid via WalletFloat (fee-inclusive float movement). ----
+        //      Any user (Admin/Staff) may override with manual amount. Snapshot
+        //      stored on the txn row so later rule changes never rewrite history. ----
         var feeOverridden = request.FeeAmountOverride is not null;
-        if (feeOverridden && !isAdmin)
-            return Result<TxnReceiptResponse>.Failure(ErrorCodes.Forbidden,
-                "Staff များ fee override လုပ်ခွင့် မရှိပါ။ (D7)");
 
         long feeAmount;
         int? appliedRuleId;
