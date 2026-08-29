@@ -19,6 +19,7 @@ using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Infrastructure;
 using MoneyRecord.Infrastructure.Persistence;
 using MoneyRecord.Infrastructure.Security;
+using Microsoft.EntityFrameworkCore;
 
 // Build config WITHOUT file watchers (avoids inotify crash on Render free tier).
 var configuration = new ConfigurationBuilder()
@@ -166,6 +167,8 @@ var host = Host.CreateDefaultBuilder(args)
             // Seed admin on first run (checks if already exists)
             {
                 using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
+                db.Database.Migrate();
                 MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
                     .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
             }
