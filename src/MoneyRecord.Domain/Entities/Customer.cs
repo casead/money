@@ -8,6 +8,7 @@ using MoneyRecord.Domain.Common;
 /// their info lives only in transaction snapshot columns (Q12 default: walk-ins allowed).
 /// Tenancy (M11 per-shop isolation): each customer belongs to EXACTLY ONE shop —
 /// shop A sees only its own registry, shop B only its own.
+/// Source: "manual" = added via FAB, "auto" = auto-registered during transaction.
 /// </summary>
 public class Customer
 {
@@ -21,6 +22,9 @@ public class Customer
     public string? Address { get; private set; }
 
     public string? Note { get; private set; }
+
+    /// <summary>Customer source: "manual" (FAB) or "auto" (transaction auto-register).</summary>
+    public string Source { get; private set; } = "auto";
 
     /// <summary>Owning shop — customers are shop-private (per-shop isolation).</summary>
     public long ShopId { get; private set; }
@@ -41,7 +45,7 @@ public class Customer
 
     public static Customer Create(string fullName, string phone,
         string? address, string? note, long actorUserId, IClock clock,
-        long shopId)
+        long shopId, string source = "auto")
     {
         return new Customer
         {
@@ -49,6 +53,7 @@ public class Customer
             Phone = phone,
             Address = address?.Trim(),
             Note = note?.Trim(),
+            Source = source,
             ShopId = shopId,
             IsDeleted = false,
             CreatedAtUtc = clock.UtcNow,

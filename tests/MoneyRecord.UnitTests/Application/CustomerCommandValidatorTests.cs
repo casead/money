@@ -12,7 +12,7 @@ public class CustomerCommandValidatorTests
     private readonly UpdateCustomerCommandValidator _update = new();
 
     private static CreateCustomerCommand Valid() =>
-        new("Aung Aung", "0977000111", null, null);
+        new("Aung Aung", "0977000111", null, null, null);
 
     [Fact]
     public void ValidCreate_Passes()

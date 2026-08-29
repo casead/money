@@ -23,7 +23,8 @@ public sealed record ListCustomersQuery(
     string? Search,
     DateTime? DateFrom = null,
     DateTime? DateTo = null,
-    bool IncludeDeleted = false) : IRequest<Result<PagedResult<CustomerListItem>>>;
+    bool IncludeDeleted = false,
+    string? Source = null) : IRequest<Result<PagedResult<CustomerListItem>>>;
 
 public sealed class ListCustomersQueryValidator : AbstractValidator<ListCustomersQuery>
 {
@@ -69,6 +70,10 @@ public sealed class ListCustomersQueryHandler
             ? _db.Customers.IgnoreQueryFilters()
             : _db.Customers)
             .Where(c => c.ShopId == _currentUser.ShopId);
+
+        // Source filter (manual / auto)
+        if (!string.IsNullOrWhiteSpace(request.Source))
+            query = query.Where(c => c.Source == request.Source);
 
         var hasSearch = !string.IsNullOrWhiteSpace(request.Search);
         if (hasSearch)

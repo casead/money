@@ -535,6 +535,12 @@ namespace MoneyRecord.Infrastructure.Persistence.Migrations
                     b.Property<long>("ShopId")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("character varying(20)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedByUserId");

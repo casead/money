@@ -20,7 +20,8 @@ public sealed record CreateCustomerCommand(
     string FullName,
     string Phone,
     string? Address,
-    string? Note) : IRequest<Result<CustomerDetailResponse>>, ICommand;
+    string? Note,
+    string? Source) : IRequest<Result<CustomerDetailResponse>>, ICommand;
 
 public sealed class CreateCustomerCommandValidator : AbstractValidator<CreateCustomerCommand>
 {
@@ -89,7 +90,7 @@ public sealed class CreateCustomerCommandHandler
 
         var customer = Customer.Create(
             request.FullName, phone, request.Address, request.Note, actorId, _clock,
-            shopId);
+            shopId, source: request.Source ?? "auto");
 
         _db.Customers.Add(customer);
         await _db.SaveChangesAsync(ct); // id lands in audit row; same TxBehavior txn

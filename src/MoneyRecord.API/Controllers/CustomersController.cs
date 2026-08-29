@@ -27,11 +27,12 @@ public class CustomersController : ControllerBase
         [FromQuery] string? sortBy = null, [FromQuery] string? sortDir = null,
         [FromQuery] string? search = null, [FromQuery] bool includeDeleted = false,
         [FromQuery] DateTime? dateFrom = null, [FromQuery] DateTime? dateTo = null,
+        [FromQuery] string? source = null,
         CancellationToken ct = default)
     {
         var result = await _sender.Send(
             new ListCustomersQuery(page, pageSize, sortBy, sortDir, search,
-                dateFrom, dateTo, includeDeleted), ct);
+                dateFrom, dateTo, includeDeleted, source), ct);
 
         return result.IsSuccess
             ? Ok(Envelope(result.Value.Items,
@@ -49,7 +50,7 @@ public class CustomersController : ControllerBase
         CancellationToken ct)
     {
         var result = await _sender.Send(
-            new CreateCustomerCommand(body.FullName, body.Phone, body.Address, body.Note),
+            new CreateCustomerCommand(body.FullName, body.Phone, body.Address, body.Note, body.Source),
             ct);
 
         if (!result.IsSuccess) return Error(result);
@@ -128,7 +129,7 @@ public class CustomersController : ControllerBase
     }
 
     public sealed record CreateCustomerRequest(
-        string FullName, string Phone, string? Address, string? Note);
+        string FullName, string Phone, string? Address, string? Note, string? Source);
 
     public sealed record UpdateCustomerRequest(
         string? FullName, string? Phone, string? Address, string? Note);
