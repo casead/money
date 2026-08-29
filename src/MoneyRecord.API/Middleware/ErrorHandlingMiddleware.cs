@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using MoneyRecord.Application.Common.Exceptions;
 using MoneyRecord.Domain.Common.Errors;
 using MoneyRecord.Domain.Common.Exceptions;
+using Npgsql;
 
 namespace MoneyRecord.API.Middleware;
 
@@ -76,6 +77,13 @@ public static class ErrorHandlingMiddleware
             BusinessRuleException br => (StatusCodes.Status422UnprocessableEntity, br.ErrorCode, br.Message, null),
             UnauthorizedAccessException => (StatusCodes.Status403Forbidden, ErrorCodes.Forbidden,
                 "ခွင့်ပြုချက် မရှိပါ။", null),
+            // DB connection / transient failures → 503 (not 500) so callers can retry
+            NpgsqlException npgsqlEx => (
+                StatusCodes.Status503ServiceUnavailable, "DATABASE_UNAVAILABLE",
+                "Database ချိတ်ဆက်မှု ပြဿနာဖြစ်နေပါသည် — ခဏနေပြီး ပြန်ကြိုးစားပါ။", null),
+            ObjectDisposedException => (
+                StatusCodes.Status503ServiceUnavailable, "SERVICE_UNAVAILABLE",
+                "Service ခေတ္တမလုပ်နိုင်သေးပါ — ခဏနေပြီး ပြန်ကြိုးစားပါ။", null),
             _ => (StatusCodes.Status500InternalServerError, "INTERNAL_ERROR",
                 "စနစ်အတွင်းပိုင်း အမှားတစ်ခု ဖြစ်ပွားသည်။", null)
         };

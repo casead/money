@@ -189,6 +189,19 @@ var host = Host.CreateDefaultBuilder(args)
                 MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
                     .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
             }
+
+            // Warm up the connection pool so the first real request doesn't pay cold-start latency
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var warmupScope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
+                    var warmupDb = warmupScope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
+                    await warmupDb.Database.OpenConnectionAsync();
+                    await warmupDb.Database.CloseConnectionAsync();
+                }
+                catch { /* non-critical — real requests have retry logic */ }
+            });
         });
     })
     .Build();

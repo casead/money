@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using MoneyRecord.Application.Common.Behaviors;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Application.Common.Models;
@@ -35,11 +36,13 @@ public abstract class CreateTxnHandlerBase<TCommand>
     private readonly IClock _clock;
     private readonly ICurrentUser _currentUser;
     private readonly IAuditLogger _audit;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     protected CreateTxnHandlerBase(IMoneyRecordDbContext db, IBalanceLocker locker,
         IIdempotencyStore idempotency, ITxnNumberGenerator txnNumbers,
         IFeeCalculator feeCalculator, IClock clock,
-        ICurrentUser currentUser, IAuditLogger audit)
+        ICurrentUser currentUser, IAuditLogger audit,
+        IServiceScopeFactory scopeFactory)
     {
         _db = db;
         _locker = locker;
@@ -49,6 +52,7 @@ public abstract class CreateTxnHandlerBase<TCommand>
         _clock = clock;
         _currentUser = currentUser;
         _audit = audit;
+        _scopeFactory = scopeFactory;
     }
 
     protected abstract TransactionType Type { get; }
@@ -217,20 +221,30 @@ public abstract class CreateTxnHandlerBase<TCommand>
             request.IdempotencyKey, JsonSerializer.Serialize(receipt), ct);
 
         // ---- Deferred non-critical operations (after response ready) ----
-        // These run in background to reduce critical path latency.
-        var dbForBg = _db;
-        var auditForBg = _audit;
-        var clockForBg = _clock;
+        // Each runs in its own DI scope to avoid using the request-scoped DbContext
+        // after the TransactionBehavior commits and the request scope is disposed.
+        var txnNoCapture = txn.TxnNo;
+        var amountCapture = request.Amount;
+        var feeAmountCapture = feeAmount;
+        var feeViaCapture = feeVia.ToString();
+        var accountNameCapture = account.AccountName;
+        var cashAfterCapture = lockedCash.CurrentCashBalance;
+        var floatAfterCapture = lockedWallet.CurrentFloatBalance;
+        var actionCodeCapture = ActionCode;
+        var typeCapture = Type;
+
         _ = Task.Run(async () =>
         {
             try
             {
-                // Duplicate warning check
-                var windowStart = clockForBg.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
-                await dbForBg.Transactions.AsNoTracking()
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
+                var clock = scope.ServiceProvider.GetRequiredService<IClock>();
+                var windowStart = clock.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
+                await db.Transactions.AsNoTracking()
                     .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
-                                   t.Amount == request.Amount &&
-                                   t.Type == Type &&
+                                   t.Amount == amountCapture &&
+                                   t.Type == typeCapture &&
                                    t.Status == TransactionStatus.Completed &&
                                    t.OccurredAtUtc >= windowStart);
             }
@@ -240,21 +254,22 @@ public abstract class CreateTxnHandlerBase<TCommand>
         {
             try
             {
-                // Audit log
-                await auditForBg.LogAsync(ActionCode, "Transaction", txn.TxnNo,
+                using var scope = _scopeFactory.CreateScope();
+                var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
+                await audit.LogAsync(actionCodeCapture, "Transaction", txnNoCapture,
                     newValue: JsonSerializer.Serialize(new
                     {
-                        txnNo,
-                        type = Type.ToString(),
-                        amount = request.Amount,
-                        feeAmount,
-                        feePaidVia = feeVia.ToString(),
+                        txnNo = txnNoCapture,
+                        type = typeCapture.ToString(),
+                        amount = amountCapture,
+                        feeAmount = feeAmountCapture,
+                        feePaidVia = feeViaCapture,
                         customerPhone = MyanmarPhone.Mask(phone),
-                        account = account.AccountName,
+                        account = accountNameCapture,
                         balancesAfter = new
                         {
-                            cash = lockedCash.CurrentCashBalance,
-                            floatBalance = lockedWallet.CurrentFloatBalance
+                            cash = cashAfterCapture,
+                            floatBalance = floatAfterCapture
                         }
                     }));
             }

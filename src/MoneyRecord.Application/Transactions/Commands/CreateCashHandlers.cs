@@ -1,4 +1,5 @@
 using MediatR;
+using Microsoft.Extensions.DependencyInjection;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Application.Common.Models;
 using MoneyRecord.Application.Fees.Services;
@@ -16,8 +17,9 @@ public sealed class CreateCashInHandler : CreateTxnHandlerBase<CreateCashInComma
     public CreateCashInHandler(IMoneyRecordDbContext db, IBalanceLocker locker,
         IIdempotencyStore idempotency, ITxnNumberGenerator txnNumbers,
         IFeeCalculator feeCalculator, IClock clock,
-        ICurrentUser currentUser, IAuditLogger audit)
-        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit)
+        ICurrentUser currentUser, IAuditLogger audit,
+        IServiceScopeFactory scopeFactory)
+        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit, scopeFactory)
     {
     }
 
@@ -35,8 +37,9 @@ public sealed class CreateCashOutHandler : CreateTxnHandlerBase<CreateCashOutCom
     public CreateCashOutHandler(IMoneyRecordDbContext db, IBalanceLocker locker,
         IIdempotencyStore idempotency, ITxnNumberGenerator txnNumbers,
         IFeeCalculator feeCalculator, IClock clock,
-        ICurrentUser currentUser, IAuditLogger audit)
-        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit)
+        ICurrentUser currentUser, IAuditLogger audit,
+        IServiceScopeFactory scopeFactory)
+        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit, scopeFactory)
     {
     }
 
