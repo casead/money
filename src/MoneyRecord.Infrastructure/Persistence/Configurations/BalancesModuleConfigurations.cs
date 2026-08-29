@@ -36,10 +36,10 @@ public class WalletAccountConfiguration : IEntityTypeConfiguration<WalletAccount
 
         b.Property(x => x.AccountName).HasMaxLength(100).IsRequired();
         b.Property(x => x.AccountNumber).HasMaxLength(30).IsUnicode(false);
-        b.HasIndex(x => x.AccountNumber)
+        b.HasIndex(x => new { x.WalletProviderId, x.AccountNumber })
             .IsUnique()
             .HasFilter("\"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false")
-            .HasDatabaseName("UQ_WalletAccounts_AccountNumber");
+            .HasDatabaseName("UQ_WalletAccounts_Provider_AccountNumber");
 
         b.Property(x => x.CurrentFloatBalance).HasDefaultValue(0);
         b.ToTable(t => t.HasCheckConstraint("CK_WalletAccounts_Float_Nonneg",

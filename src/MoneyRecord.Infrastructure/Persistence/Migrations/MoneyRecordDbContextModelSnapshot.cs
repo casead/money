@@ -1630,9 +1630,9 @@ namespace MoneyRecord.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AccountNumber")
+                    b.HasIndex("WalletProviderId", "AccountNumber")
                         .IsUnique()
-                        .HasDatabaseName("UQ_WalletAccounts_AccountNumber")
+                        .HasDatabaseName("UQ_WalletAccounts_Provider_AccountNumber")
                         .HasFilter("\"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
 
                     b.HasIndex("ShopId")

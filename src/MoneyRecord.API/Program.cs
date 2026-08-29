@@ -175,6 +175,17 @@ var host = Host.CreateDefaultBuilder(args)
                         "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
                 }
                 catch { /* column already exists or DB not ready */ }
+                // Fix unique index: AccountNumber → (WalletProviderId, AccountNumber)
+                try
+                {
+                    db.Database.ExecuteSqlRaw(
+                        "DROP INDEX IF EXISTS \"UQ_WalletAccounts_AccountNumber\"");
+                    db.Database.ExecuteSqlRaw(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
+                        "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
+                        "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
+                }
+                catch { /* index already migrated or DB not ready */ }
                 MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
                     .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
             }
