@@ -168,7 +168,13 @@ var host = Host.CreateDefaultBuilder(args)
             {
                 using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
-                db.Database.Migrate();
+                // Lightweight column add (avoids full Migrate() timeout on free tier)
+                try
+                {
+                    db.Database.ExecuteSqlRaw(
+                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
+                }
+                catch { /* column already exists or DB not ready */ }
                 MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
                     .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
             }
