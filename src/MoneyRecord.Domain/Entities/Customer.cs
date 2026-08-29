@@ -26,6 +26,9 @@ public class Customer
     /// <summary>Customer source: "manual" (FAB) or "auto" (transaction auto-register).</summary>
     public string Source { get; private set; } = "auto";
 
+    /// <summary>User-bookmarked for quick access in Bookmark tab.</summary>
+    public bool IsBookmarked { get; private set; }
+
     /// <summary>Owning shop — customers are shop-private (per-shop isolation).</summary>
     public long ShopId { get; private set; }
 
@@ -74,5 +77,10 @@ public class Customer
         if (note is not null) Note = note.Trim();
         ModifiedAtUtc = clock.UtcNow;
         ModifiedByUserId = actorUserId;
+    }
+
+    public void SetBookmarked(bool bookmarked)
+    {
+        IsBookmarked = bookmarked;
     }
 }

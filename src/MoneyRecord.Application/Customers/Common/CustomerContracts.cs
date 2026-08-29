@@ -26,7 +26,7 @@ internal static class CustomerMapping
     public static CustomerDetailResponse ToResponse(Domain.Entities.Customer c,
         CustomerLifetimeStats stats) =>
         new(c.Id, c.FullName, c.Phone, c.Address, c.Note,
-            c.CreatedAtUtc, c.ModifiedAtUtc, stats);
+            c.IsBookmarked, c.CreatedAtUtc, c.ModifiedAtUtc, stats);
 }
 
 /// <summary>CUS-003 full profile + lifetime aggregates.</summary>
@@ -36,6 +36,7 @@ public sealed record CustomerDetailResponse(
     string Phone,
     string? Address,
     string? Note,
+    bool IsBookmarked,
     DateTime CreatedAtUtc,
     DateTime? ModifiedAtUtc,
     CustomerLifetimeStats Lifetime);
@@ -45,7 +46,8 @@ public sealed record CustomerListItem(
     long Id,
     string FullName,
     string Phone,
-    string? Address)
+    string? Address,
+    bool IsBookmarked = false)
 {
     public string MaskedPhone => MyanmarPhone.Mask(Phone);
 }

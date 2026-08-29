@@ -175,6 +175,12 @@ var host = Host.CreateDefaultBuilder(args)
                         "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
                 }
                 catch { /* column already exists or DB not ready */ }
+                try
+                {
+                    db.Database.ExecuteSqlRaw(
+                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"IsBookmarked\" boolean NOT NULL DEFAULT false");
+                }
+                catch { /* column already exists or DB not ready */ }
                 // Fix unique index: AccountNumber → (WalletProviderId, AccountNumber)
                 try
                 {

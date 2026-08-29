@@ -28,6 +28,7 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
 
         b.Property(x => x.Address).HasMaxLength(200);
         b.Property(x => x.Note).HasMaxLength(500);
+        b.Property(x => x.IsBookmarked).IsRequired().HasDefaultValue(false);
 
         // Per-shop tenancy (M11 isolation) — every customer belongs to one shop.
         b.Property(x => x.ShopId);

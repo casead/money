@@ -24,7 +24,8 @@ public sealed record ListCustomersQuery(
     DateTime? DateFrom = null,
     DateTime? DateTo = null,
     bool IncludeDeleted = false,
-    string? Source = null) : IRequest<Result<PagedResult<CustomerListItem>>>;
+    string? Source = null,
+    bool? Bookmarked = null) : IRequest<Result<PagedResult<CustomerListItem>>>;
 
 public sealed class ListCustomersQueryValidator : AbstractValidator<ListCustomersQuery>
 {
@@ -74,6 +75,10 @@ public sealed class ListCustomersQueryHandler
         // Source filter (manual / auto)
         if (!string.IsNullOrWhiteSpace(request.Source))
             query = query.Where(c => c.Source == request.Source);
+
+        // Bookmark filter
+        if (request.Bookmarked == true)
+            query = query.Where(c => c.IsBookmarked);
 
         var hasSearch = !string.IsNullOrWhiteSpace(request.Search);
         if (hasSearch)
@@ -125,7 +130,7 @@ public sealed class ListCustomersQueryHandler
         var items = await ordered
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(c => new CustomerListItem(c.Id, c.FullName, c.Phone, c.Address))
+            .Select(c => new CustomerListItem(c.Id, c.FullName, c.Phone, c.Address, c.IsBookmarked))
             .ToListAsync(ct);
 
         return Result<PagedResult<CustomerListItem>>.Success(

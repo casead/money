@@ -27,12 +27,12 @@ public class CustomersController : ControllerBase
         [FromQuery] string? sortBy = null, [FromQuery] string? sortDir = null,
         [FromQuery] string? search = null, [FromQuery] bool includeDeleted = false,
         [FromQuery] DateTime? dateFrom = null, [FromQuery] DateTime? dateTo = null,
-        [FromQuery] string? source = null,
+        [FromQuery] string? source = null, [FromQuery] bool? bookmarked = null,
         CancellationToken ct = default)
     {
         var result = await _sender.Send(
             new ListCustomersQuery(page, pageSize, sortBy, sortDir, search,
-                dateFrom, dateTo, includeDeleted, source), ct);
+                dateFrom, dateTo, includeDeleted, source, bookmarked), ct);
 
         return result.IsSuccess
             ? Ok(Envelope(result.Value.Items,
@@ -96,6 +96,15 @@ public class CustomersController : ControllerBase
             : Error(result);
     }
 
+    /// <summary>Toggle bookmark for quick access in Bookmark tab.</summary>
+    [HttpPost("{id:long}/bookmark")]
+    public async Task<IActionResult> ToggleBookmark(long id, [FromBody] BookmarkRequest body,
+        CancellationToken ct)
+    {
+        var result = await _sender.Send(new ToggleBookmarkCommand(id, body.IsBookmarked), ct);
+        return result.IsSuccess ? Ok(Envelope(result.Value)) : Error(result);
+    }
+
     // ---- helpers ----
 
     private static object Envelope<T>(T data) => new { data };
@@ -133,4 +142,6 @@ public class CustomersController : ControllerBase
 
     public sealed record UpdateCustomerRequest(
         string? FullName, string? Phone, string? Address, string? Note);
+
+    public sealed record BookmarkRequest(bool IsBookmarked);
 }
