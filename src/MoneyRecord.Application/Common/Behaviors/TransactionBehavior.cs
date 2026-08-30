@@ -35,21 +35,23 @@ public sealed class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior
 
         for (int attempt = 1; ; attempt++)
         {
+            Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? tx = null;
             try
             {
-                await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
-                try
+                // MongoDB EF Core provider does not implement relational BeginTransactionAsync.
+                // Only wrap in a transaction when the provider supports it (relational DBs).
+                if (_db.Database.ProviderName != "MongoDB.EntityFrameworkCore")
                 {
-                    var result = await next();
-                    await _db.SaveChangesAsync(cancellationToken);
+                    tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+                }
+
+                var result = await next();
+                await _db.SaveChangesAsync(cancellationToken);
+
+                if (tx is not null)
                     await tx.CommitAsync(cancellationToken);
-                    return result!;
-                }
-                catch
-                {
-                    await tx.RollbackAsync(cancellationToken);
-                    throw;
-                }
+
+                return result!;
             }
             catch (Exception ex) when (IsTransient(ex) && attempt < maxAttempts)
             {
@@ -60,8 +62,16 @@ public sealed class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior
             }
             catch
             {
+                if (tx is not null)
+                {
+                    try { await tx.RollbackAsync(CancellationToken.None); } catch { /* best effort */ }
+                }
                 await _db.ClearTrackedEntitiesAsync(CancellationToken.None);
                 throw;
+            }
+            finally
+            {
+                await tx!.DisposeAsync();
             }
         }
     }
