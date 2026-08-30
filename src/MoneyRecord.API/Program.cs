@@ -187,10 +187,12 @@ var host = Host.CreateDefaultBuilder(args)
                 }
             });
 
-            // Seed admin on first run (checks if already exists)
+            // Seed reference data first (Roles, Permissions, WalletProviders, etc.)
+            // THEN seed admin user (needs Roles to exist for login roleCode lookup)
             _ = Task.Run(async () =>
             {
                 using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
+                await ReferenceDataSeeder.SeedAsync(scope.ServiceProvider);
                 await AdminSeeder.SeedAsync(scope.ServiceProvider);
             });
         });
