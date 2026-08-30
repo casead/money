@@ -47,7 +47,6 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<L
     {
         var username = request.Username.Trim();
         var user = await _db.Users
-            .Include(u => u.Role)
             .FirstOrDefaultAsync(u => u.Username == username, ct);
 
         // Uniform failure for unknown user vs bad password (no user enumeration).
@@ -56,8 +55,10 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<L
             await _audit.LogAsync("AUTH.LOGIN_FAILED", "User", username,
                 newValue: null, ct: ct);
             return Result<LoginResponse>.Failure(ErrorCodes.Unauthorized,
-                "Username á€žá€­á€¯á€·á€™á€Ÿá€¯á€á€º Password á€™á€¾á€¬á€¸á€”á€±á€•á€«á€žá€Šá€ºá‹");
+                "Username နှင့် Password မှားနေပါသည်။");
         }
+
+        var role = await _db.Roles.FindAsync(user.RoleId);
 
         // Tenant gate (M11): suspended shops block all member logins.
         if (user.ShopId is not null)
@@ -126,7 +127,7 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<L
             newValue: System.Text.Json.JsonSerializer.Serialize(new
             {
                 user.Username,
-                role = user.Role.Code,
+                role = role?.Code,
                 device = refresh.DeviceInfo
             }), ct: ct);
 
@@ -136,7 +137,7 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<L
             accessToken,
             rawRefresh,
             expiresInSeconds(expiresUtc),
-            new CurrentUserDto(user.Id, user.Username, user.FullName, user.Role.Code,
+            new CurrentUserDto(user.Id, user.Username, user.FullName, role?.Code ?? "Staff",
                 user.ShopId)));
     }
 

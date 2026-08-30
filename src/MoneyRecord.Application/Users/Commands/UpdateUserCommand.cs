@@ -42,10 +42,11 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
         var actorId = _currentUser.UserId ?? 0;
 
         var user = await _db.Users
-            .Include(u => u.Role)
             .FirstOrDefaultAsync(u => u.Id == request.Id, ct);
         if (user is null)
             return Result<UserDetailResponse>.Failure(ErrorCodes.NotFound, "User ရှာမတွေ့ပါ။");
+
+        var roleBefore = await _db.Roles.FindAsync(user.RoleId);
 
         // ---- Role change path ----
         var requestedRoleId = request.RoleId;
@@ -97,9 +98,11 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
 
         await _db.SaveChangesAsync(ct);
 
+        var roleAfter = await _db.Roles.FindAsync(user.RoleId);
+
         return Result<UserDetailResponse>.Success(new UserDetailResponse(
             user.Id, user.Username, user.FullName, user.Phone,
-            user.RoleId, user.Role.Code, user.IsActive,
+            user.RoleId, roleAfter?.Code ?? "Staff", user.IsActive,
             user.LastLoginAtUtc, user.CreatedAtUtc, user.ModifiedAtUtc));
     }
 

@@ -36,13 +36,14 @@ public sealed class GetCurrentUserQueryHandler : IRequestHandler<GetCurrentUserQ
             return Result<MeResponse>.Failure(ErrorCodes.Unauthorized, "Login ဝင်ပါ။");
 
         var user = await _db.Users
-            .Include(u => u.Role)
-            .Include(u => u.Shop)
             .FirstOrDefaultAsync(u => u.Id == userId && u.IsActive && !u.IsDeleted, ct);
 
         if (user is null)
             return Result<MeResponse>.Failure(ErrorCodes.Unauthorized,
                 "Account ရှာမတွေ့ပါ သို့မဟုတ် ရပ်တန့်ထားပါသည်။");
+
+        var role = await _db.Roles.FindAsync(user.RoleId);
+        var shop = user.ShopId.HasValue ? await _db.Shops.FindAsync(user.ShopId) : null;
 
         // v1 permission model: code-level registry (single source of truth, DBD T03 note).
         var permissions = RolePermissionRegistry.Ordered(user.RoleId);
@@ -51,8 +52,8 @@ public sealed class GetCurrentUserQueryHandler : IRequestHandler<GetCurrentUserQ
             user.Id,
             user.Username,
             user.FullName,
-            user.Role.Code,
+            role?.Code ?? "Staff",
             permissions,
-            ShopName: user.Shop?.Name ?? "Platform"));
+            ShopName: shop?.Name ?? "Platform"));
     }
 }

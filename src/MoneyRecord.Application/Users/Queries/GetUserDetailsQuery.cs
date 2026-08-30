@@ -20,14 +20,16 @@ public sealed class GetUserDetailsQueryHandler
     public async Task<Result<UserDetailResponse>> Handle(GetUserDetailsQuery request, CancellationToken ct)
     {
         var user = await _db.Users.AsNoTracking()
-            .Include(u => u.Role)
             .FirstOrDefaultAsync(u => u.Id == request.Id, ct);
 
-        return user is null
-            ? Result<UserDetailResponse>.Failure(ErrorCodes.NotFound, "User ရှာမတွေ့ပါ။")
-            : Result<UserDetailResponse>.Success(new UserDetailResponse(
-                user.Id, user.Username, user.FullName, user.Phone,
-                user.RoleId, user.Role.Code, user.IsActive,
-                user.LastLoginAtUtc, user.CreatedAtUtc, user.ModifiedAtUtc));
+        if (user is null)
+            return Result<UserDetailResponse>.Failure(ErrorCodes.NotFound, "User ရှာမတွေ့ပါ။");
+
+        var role = await _db.Roles.FindAsync(user.RoleId);
+
+        return Result<UserDetailResponse>.Success(new UserDetailResponse(
+            user.Id, user.Username, user.FullName, user.Phone,
+            user.RoleId, role?.Code ?? "Staff", user.IsActive,
+            user.LastLoginAtUtc, user.CreatedAtUtc, user.ModifiedAtUtc));
     }
 }

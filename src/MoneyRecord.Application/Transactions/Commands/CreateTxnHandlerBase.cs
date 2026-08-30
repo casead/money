@@ -77,14 +77,15 @@ public abstract class CreateTxnHandlerBase<TCommand>
 
         // ---- Resolve target account (+provider) ----
         var account = await _db.WalletAccounts
-            .Include(a => a.WalletProvider)
             .FirstOrDefaultAsync(a => a.Id == request.WalletAccountId && !a.IsDeleted, ct);
         if (account is null || !account.IsActive)
             return Result<TxnReceiptResponse>.Failure(ErrorCodes.NotFound,
                 "Wallet account ရှာမတွေ့ပါ သို့မဟုတ် ပိတ်ထားပါသည်။");
-        if (!account.WalletProvider.IsActive)
+
+        var walletProvider = await _db.WalletProviders.FindAsync(account.WalletProviderId);
+        if (walletProvider is null || !walletProvider.IsActive)
             return Result<TxnReceiptResponse>.Failure(ErrorCodes.InvalidOperation,
-                $"{account.WalletProvider.Name} provider ကို ပိတ်ထားသဖြင့် အသုံးပြုလို့မရပါ။");
+                $"{walletProvider?.Name ?? "Provider"} provider ကို ပိတ်ထားသဖြင့် အသုံးပြုလို့မရပါ။");
 
         var phone = MyanmarPhone.TryNormalize(request.CustomerPhone)!;
 

@@ -51,13 +51,13 @@ public sealed class RefreshCommandHandler : IRequestHandler<RefreshCommand, Resu
         var now = _clock.UtcNow;
 
         var stored = await _db.RefreshTokens
-            .Include(rt => rt.User)
-            .ThenInclude(u => u.Role)
             .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash, ct);
 
         if (stored is null)
             return Result<LoginResponse>.Failure(ErrorCodes.Unauthorized,
-                "Session á€žá€€á€ºá€á€™á€ºá€¸á€€á€¯á€”á€ºá€žá€½á€¬á€¸á€•á€«á€žá€Šá€ºá‹ á€‘á€•á€ºá€á€„á€ºá€•á€«á‹");
+                "Session သက်တမ်းကုန်သွားပါပြီ သို့မဟုတ် ပိတ်သိမ်းထားပါသည်။");
+
+        var user = await _db.Users.FindAsync(stored.UserId);
 
         // ---- Theft detection: token already consumed/revoked ----
         if (stored.RevokedAtUtc is not null)
@@ -74,7 +74,7 @@ public sealed class RefreshCommandHandler : IRequestHandler<RefreshCommand, Resu
 
         if (stored.ExpiresAtUtc <= now)
             return Result<LoginResponse>.Failure(ErrorCodes.Unauthorized,
-                "Session á€žá€€á€ºá€á€™á€ºá€¸á€€á€¯á€”á€ºá€žá€½á€¬á€¸á€•á€«á€žá€Šá€ºá‹ á€‘á€•á€ºá€á€„á€ºá€•á€«á‹");
+                "Session သက်တမ်းကုန်သွားပါပြီ။");
 
         // Device binding check (AUTH-003 rule): same device required
         if (stored.DeviceInfo is not null &&
@@ -82,16 +82,17 @@ public sealed class RefreshCommandHandler : IRequestHandler<RefreshCommand, Resu
             !string.Equals(stored.DeviceInfo, _requestContext.DeviceInfo, StringComparison.Ordinal))
         {
             return Result<LoginResponse>.Failure(ErrorCodes.Unauthorized,
-                "Device á€™á€á€°á€Šá€®á€•á€«á‹ á€‘á€•á€ºá€á€„á€ºá€•á€«á‹");
+                "Device မတူညီပါ။");
         }
 
         // User must still be active
-        if (!stored.User.IsActive || stored.User.IsDeleted)
+        if (user is null || !user.IsActive || user.IsDeleted)
             return Result<LoginResponse>.Failure(ErrorCodes.Forbidden,
-                "Account á€›á€•á€ºá€á€”á€·á€ºá€‘á€¬á€¸á€•á€«á€žá€Šá€ºá‹");
+                "Account ရပ်တန့်ထားပါသည်။");
+
+        var role = await _db.Roles.FindAsync(user.RoleId);
 
         // ---- Rotate: consume old, issue new pair ----
-        var user = stored.User;
         var rawNew = _tokens.CreateRefreshToken();
         var newHash = ITokenService.HashRefreshToken(rawNew);
 
@@ -109,7 +110,7 @@ public sealed class RefreshCommandHandler : IRequestHandler<RefreshCommand, Resu
             accessToken,
             rawNew,
             Math.Max(0, (int)(expiresUtc - DateTime.UtcNow).TotalSeconds),
-            new CurrentUserDto(user.Id, user.Username, user.FullName, user.Role.Code,
+            new CurrentUserDto(user.Id, user.Username, user.FullName, role?.Code ?? "Staff",
                 user.ShopId)));
     }
 

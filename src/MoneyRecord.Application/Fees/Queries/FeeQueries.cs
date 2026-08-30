@@ -32,7 +32,6 @@ public sealed class ListFeeRulesQueryHandler
             : DateTime.MaxValue;
 
         var query = _db.FeeRules.AsNoTracking()
-            .Include(r => r.WalletProvider)
             .OrderByDescending(r => r.EffectiveFromUtc)
             .AsQueryable();
 
@@ -45,8 +44,15 @@ public sealed class ListFeeRulesQueryHandler
 
         var items = await query.ToListAsync(ct);
 
+        var providerIds = items.Select(r => r.WalletProviderId).Distinct().ToList();
+        var providers = await _db.WalletProviders
+            .Where(p => providerIds.Contains(p.Id))
+            .ToListAsync(ct);
+        var providerDict = providers.ToDictionary(p => p.Id);
+
         return Result<List<FeeRuleResponse>>.Success(items
-            .Select(r => CreateFeeRuleCommandHandler.ToResponse(r, r.WalletProvider.Code))
+            .Select(r => CreateFeeRuleCommandHandler.ToResponse(r,
+                providerDict.TryGetValue(r.WalletProviderId, out var wp) ? wp.Code : "UNKNOWN"))
             .ToList());
     }
 }
