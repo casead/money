@@ -13,23 +13,22 @@ namespace MoneyRecord.Infrastructure.Persistence;
 /// </summary>
 public sealed class MongoValueGenerator : ValueGenerator<long>
 {
-    private readonly Func<IMongoDatabase> _databaseFactory;
+    private readonly IMongoDatabase _database;
 
-    public MongoValueGenerator(Func<IMongoDatabase> databaseFactory)
+    public MongoValueGenerator(IMongoDatabase database)
     {
-        _databaseFactory = databaseFactory;
+        _database = database;
     }
 
     public override bool GeneratesTemporaryValues => false;
 
     public override long Next(EntityEntry entry)
     {
-        var database = _databaseFactory();
         var entityType = entry.Context.Model.FindEntityType(entry.Entity.GetType());
         var collectionName = entityType?.ShortName() ?? "default";
         var counterName = $"{collectionName}_id";
 
-        var collection = database.GetCollection<BsonDocument>("counters");
+        var collection = _database.GetCollection<BsonDocument>("counters");
         var filter = Builders<BsonDocument>.Filter.Eq("_id", counterName);
         var update = Builders<BsonDocument>.Update.Inc("seq", 1);
         var options = new FindOneAndUpdateOptions<BsonDocument>
@@ -39,6 +38,6 @@ public sealed class MongoValueGenerator : ValueGenerator<long>
         };
 
         var result = collection.FindOneAndUpdate(filter, update, options);
-        return result["seq"].AsInt64;
+        return result["seq"].ToInt64();
     }
 }

@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,6 +69,54 @@ public sealed class MongoDbFixture : IAsyncLifetime
             roleId: Domain.Common.Rbac.RolePermissionRegistry.StaffRoleId,
             actorUserId: 0, clock, shopId: 1));
         await db.SaveChangesAsync();
+
+        // MongoDB EF provider ignores HasData() — seed reference collections manually
+        if (!db.WalletProviders.Any())
+        {
+            db.WalletProviders.AddRange(
+                new WalletProvider("WAVE", "Wave Money", null, 1, id: 1),
+                new WalletProvider("KBZPAY", "KBZPay", null, 2, id: 2));
+            await db.SaveChangesAsync();
+        }
+        if (!db.AdjustmentTypes.Any())
+        {
+            db.AdjustmentTypes.AddRange(
+                new AdjustmentType(AdjustmentType.CashCorrectionId, "CashCorrection", "Cash Correction"),
+                new AdjustmentType(AdjustmentType.FloatTopUpId, "FloatTopUp", "Float Top-up"),
+                new AdjustmentType(AdjustmentType.FloatWithdrawalId, "FloatWithdrawal", "Float Withdrawal"));
+            await db.SaveChangesAsync();
+        }
+        if (!db.TransactionTypeSeeds.Any())
+        {
+            db.TransactionTypeSeeds.AddRange(
+                new TransactionTypeSeed(1, "CashIn", "Cash In"),
+                new TransactionTypeSeed(2, "CashOut", "Cash Out"));
+            await db.SaveChangesAsync();
+        }
+        if (!db.TransactionStatusSeeds.Any())
+        {
+            db.TransactionStatusSeeds.AddRange(
+                new TransactionStatusSeed(1, "Pending", "Pending"),
+                new TransactionStatusSeed(2, "Completed", "Completed"),
+                new TransactionStatusSeed(3, "Cancelled", "Cancelled"),
+                new TransactionStatusSeed(4, "Reversed", "Reversed"));
+            await db.SaveChangesAsync();
+        }
+        if (!db.AppSettings.Any())
+        {
+            db.AppSettings.AddRange(
+                new AppSetting(1, "shopName", "Test Shop", "string", false, clock),
+                new AppSetting(2, "dayBoundaryOffsetHours", "0", "int", true, clock),
+                new AppSetting(3, "pendingExpiryMinutes", "30", "int", false, clock),
+                new AppSetting(4, "duplicateWindowMinutes", "5", "int", false, clock),
+                new AppSetting(5, "txnAmountCap", "10000000", "int", false, clock),
+                new AppSetting(6, "lowBalanceCashThreshold", "100000", "int", false, clock),
+                new AppSetting(7, "lowBalanceFloatThresholdPerAccount", "50000", "int", false, clock),
+                new AppSetting(8, "receiptFooterText", "Thank you", "string", false, clock),
+                new AppSetting(9, "feePercentCashIn", "0", "percent", false, clock),
+                new AppSetting(10, "feePercentCashOut", "0", "percent", false, clock));
+            await db.SaveChangesAsync();
+        }
     }
 
     public IServiceScope CreateScope() => _provider!.CreateScope();

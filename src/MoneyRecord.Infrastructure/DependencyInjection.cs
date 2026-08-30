@@ -25,11 +25,12 @@ public static class DependencyInjection
 
         // Register MongoDB client directly for index creation and atomic operations
         var mongoClient = new MongoClient(connectionString);
+        var database = mongoClient.GetDatabase(databaseName);
         services.AddSingleton<IMongoClient>(mongoClient);
-        services.AddSingleton(sp => mongoClient.GetDatabase(databaseName));
+        services.AddSingleton<IMongoDatabase>(database);
 
-        // Set static factory for value generators in DbContext
-        MoneyRecordDbContext.MongoDatabaseFactory = sp => sp.GetRequiredService<IMongoDatabase>();
+        // Set static instance for value generators in DbContext
+        MoneyRecordDbContext.MongoDatabaseInstance = database;
 
         services.AddDbContext<MoneyRecordDbContext>(options =>
             options.UseMongoDB(connectionString, databaseName));

@@ -19,8 +19,8 @@ public class MoneyRecordDbContext : DbContext
 {
     private readonly IClock? _clock;
 
-    /// <summary>Factory to resolve IMongoDatabase for value generators. Set during DI registration.</summary>
-    internal static Func<IServiceProvider, IMongoDatabase>? MongoDatabaseFactory { get; set; }
+    /// <summary>Direct IMongoDatabase instance for value generators. Set during DI registration.</summary>
+    internal static IMongoDatabase? MongoDatabaseInstance { get; set; }
 
     public MoneyRecordDbContext(DbContextOptions<MoneyRecordDbContext> options,
         IClock? clock = null)
@@ -98,13 +98,9 @@ public class MoneyRecordDbContext : DbContext
         SeedAppSettings(modelBuilder);
 
         // MongoDB value generators for long primary keys
-        if (MongoDatabaseFactory is not null)
+        if (MongoDatabaseInstance is not null)
         {
-            var generator = new MongoValueGenerator(() =>
-            {
-                var sp = this.GetInfrastructure();
-                return MongoDatabaseFactory(sp);
-            });
+            var generator = new MongoValueGenerator(MongoDatabaseInstance);
             modelBuilder.Entity<User>().Property(u => u.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<Shop>().Property(s => s.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<RefreshToken>().Property(rt => rt.Id).HasValueGenerator((_, _) => generator);

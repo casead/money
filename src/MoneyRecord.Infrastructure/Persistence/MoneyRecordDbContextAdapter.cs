@@ -51,7 +51,30 @@ public sealed class MoneyRecordDbContextAdapter : IMoneyRecordDbContext
 
     public async Task ReloadAsync<TEntity>(TEntity entity,
         CancellationToken cancellationToken = default) where TEntity : class
-        => await _db.Entry(entity).ReloadAsync(cancellationToken);
+    {
+        // MongoDB EF Core provider does not support ReloadAsync / GetDatabaseValuesAsync.
+        // Detach and re-fetch from the database instead.
+        var originalEntry = _db.Entry(entity);
+        var entityType = _db.Model.FindEntityType(typeof(TEntity));
+        var pkProps = entityType?.FindPrimaryKey()?.Properties
+            .Select(p => p.Name).ToList() ?? new List<string>();
+        var pkValues = originalEntry.Properties
+            .Where(p => pkProps.Contains(p.Metadata.Name))
+            .Select(p => p.CurrentValue).ToArray();
+        originalEntry.State = EntityState.Detached;
+
+        var fresh = await _db.Set<TEntity>().FindAsync(pkValues, cancellationToken)
+            ?? throw new InvalidOperationException($"Entity {typeof(TEntity).Name} not found after detach.");
+
+        _db.Entry(fresh).State = EntityState.Unchanged;
+        foreach (var prop in originalEntry.Properties.Where(p => !pkProps.Contains(p.Metadata.Name)))
+        {
+            var freshProp = _db.Entry(fresh).Properties
+                .First(p => p.Metadata.Name == prop.Metadata.Name);
+            prop.CurrentValue = freshProp.CurrentValue;
+        }
+        _db.Entry(entity).State = EntityState.Unchanged;
+    }
 }
 
 /// <summary>Appends audit rows using the same DbContext (same transaction) as the handler.</summary>
