@@ -71,7 +71,8 @@ public sealed class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior
             }
             finally
             {
-                await tx!.DisposeAsync();
+                if (tx is not null)
+                    await tx.DisposeAsync();
             }
         }
     }
