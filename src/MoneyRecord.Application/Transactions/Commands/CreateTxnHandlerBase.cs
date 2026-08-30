@@ -143,11 +143,15 @@ public abstract class CreateTxnHandlerBase<TCommand>
         var feeVia = request.ResolveFeePaidVia();
 
         // ---- Sufficiency guards (BR-032/033/007 hard floor) ----
-        // Wallet-paid fees ENTER the receiving pool (+F) — only the principal
-        // itself ever drains an account, so the guards check Amount alone.
+        // Cash In:  wallet must have enough float for the full Amount.
+        // Cash Out: shop must have enough cash to pay the customer.
+        //           When fee is deducted from amount, customer receives (Amount − Fee).
+        long cashNeeded = request.Amount;
+        if (!cashIn && request.FeeDeductedFromAmount && feeAmount > 0)
+            cashNeeded = request.Amount - feeAmount;
         if (cashIn && request.Amount > floatBefore)
             throw new InsufficientFloatException(floatBefore);
-        if (!cashIn && request.Amount > cashBefore)
+        if (!cashIn && cashNeeded > cashBefore)
             throw new InsufficientCashException(cashBefore);
 
         // ---- TxnNo from native SEQUENCE (race-free) ----
@@ -179,10 +183,22 @@ public abstract class CreateTxnHandlerBase<TCommand>
         var cashDirection = cashIn ? LedgerDirection.Increase : LedgerDirection.Decrease;
         var walletDirection = cashIn ? LedgerDirection.Decrease : LedgerDirection.Increase;
 
-        // Wallet movement: NetAmount when fee deducted, else full Amount.
-        var walletMovementAmount = txn.NetAmount ?? request.Amount;
+        // Wallet movement:
+        //   Cash Out + FeeDeductedFromAmount → full Amount (shop pays customer cash after deducting fee)
+        //   Cash In  + FeeDeductedFromAmount → net Amount (wallet tops up less fee)
+        //   No deduction                    → full Amount
+        var walletMovementAmount = (cashIn && txn.NetAmount.HasValue)
+            ? txn.NetAmount.Value
+            : request.Amount;
 
-        lockedCash.ApplyAdjustment(cashDirection, request.Amount, actorId, _clock);
+        // Cash movement:
+        //   Cash Out + FeeDeductedFromAmount → net Amount (customer receives less cash)
+        //   Otherwise                        → full Amount
+        var cashMovementAmount = (!cashIn && txn.NetAmount.HasValue)
+            ? txn.NetAmount.Value
+            : request.Amount;
+
+        lockedCash.ApplyAdjustment(cashDirection, cashMovementAmount, actorId, _clock);
         var cashAfterPrincipal = lockedCash.CurrentCashBalance;
         lockedWallet.ApplyAdjustment(walletDirection, walletMovementAmount, actorId, _clock);
         var floatAfterPrincipal = lockedWallet.CurrentFloatBalance;
@@ -194,7 +210,7 @@ public abstract class CreateTxnHandlerBase<TCommand>
             lockedWallet.ApplyAdjustment(LedgerDirection.Increase, feeAmount, actorId, _clock);
 
         var cashEntry = CashLedgerEntry.ForTransactionCore(
-            txn.Id, cashDirection, request.Amount,
+            txn.Id, cashDirection, cashMovementAmount,
             cashAfterPrincipal, actorId, txn.OccurredAtUtc);
         _db.CashLedgerEntries.Add(cashEntry);
 
