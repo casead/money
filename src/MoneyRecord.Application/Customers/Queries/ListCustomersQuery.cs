@@ -104,12 +104,36 @@ public sealed class ListCustomersQueryHandler
         }
 
         // Date filter: only when NOT searching. Search spans the whole registry.
+        // When date range is active and bookmark filter is NOT explicitly set,
+        // also include bookmarked customers who had transactions in that range
+        // (even if the customer was created before the range).
         if (!hasSearch)
         {
-            if (request.DateFrom.HasValue)
-                query = query.Where(c => c.CreatedAtUtc >= request.DateFrom.Value);
-            if (request.DateTo.HasValue)
-                query = query.Where(c => c.CreatedAtUtc <= request.DateTo.Value);
+            if (request.DateFrom.HasValue && request.DateTo.HasValue
+                && request.Bookmarked != true)
+            {
+                var from = request.DateFrom.Value;
+                var to = request.DateTo.Value;
+                var shopId = _currentUser.ShopId;
+                // Subquery: bookmarked customer IDs with at least one transaction in the range.
+                var bookmarkedTxnCustomerIds = _db.Transactions.AsNoTracking()
+                    .Where(t => t.ShopId == shopId
+                                && t.BusinessDate >= DateOnly.FromDateTime(from)
+                                && t.BusinessDate <= DateOnly.FromDateTime(to)
+                                && t.CustomerId != null)
+                    .Select(t => t.CustomerId!.Value)
+                    .Distinct();
+                query = query.Where(c =>
+                    (c.CreatedAtUtc >= from && c.CreatedAtUtc <= to)
+                    || (c.IsBookmarked && bookmarkedTxnCustomerIds.Contains(c.Id)));
+            }
+            else
+            {
+                if (request.DateFrom.HasValue)
+                    query = query.Where(c => c.CreatedAtUtc >= request.DateFrom.Value);
+                if (request.DateTo.HasValue)
+                    query = query.Where(c => c.CreatedAtUtc <= request.DateTo.Value);
+            }
         }
 
         var totalItems = await query.CountAsync(ct);
