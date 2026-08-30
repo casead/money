@@ -168,28 +168,37 @@ var host = Host.CreateDefaultBuilder(args)
 
             // Run DB migrations synchronously BEFORE accepting requests.
             // This ensures columns exist before the first request arrives.
+            // Retry up to 3 times for Render cold-start where DB may not be ready yet.
             if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VERCEL")))
             {
-                try
+                for (int attempt = 1; attempt <= 3; attempt++)
                 {
-                    using var scope = app.ApplicationServices.CreateScope();
-                    var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
-                    db.Database.ExecuteSqlRaw(
-                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
-                    db.Database.ExecuteSqlRaw(
-                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"IsBookmarked\" boolean NOT NULL DEFAULT false");
-                    db.Database.ExecuteSqlRaw(
-                        "DROP INDEX IF EXISTS \"UQ_WalletAccounts_AccountNumber\"");
-                    db.Database.ExecuteSqlRaw(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
-                        "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
-                        "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
-                    db.Database.ExecuteSqlRaw(
-                        "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"FeeDeductedFromAmount\" boolean NOT NULL DEFAULT false");
-                    db.Database.ExecuteSqlRaw(
-                        "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"NetAmount\" bigint");
+                    try
+                    {
+                        using var scope = app.ApplicationServices.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"IsBookmarked\" boolean NOT NULL DEFAULT false");
+                        db.Database.ExecuteSqlRaw(
+                            "DROP INDEX IF EXISTS \"UQ_WalletAccounts_AccountNumber\"");
+                        db.Database.ExecuteSqlRaw(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
+                            "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
+                            "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"FeeDeductedFromAmount\" boolean NOT NULL DEFAULT false");
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"NetAmount\" bigint");
+                        break; // success
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Migration] Attempt {attempt}/3 failed: {ex.Message}");
+                        if (attempt < 3) Thread.Sleep(2000);
+                    }
                 }
-                catch { /* already migrated or DB not ready */ }
             }
 
             // Seed admin on first run (checks if already exists)

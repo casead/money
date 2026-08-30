@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MoneyRecord.Application.Common.Exceptions;
 using MoneyRecord.Domain.Common.Errors;
 using MoneyRecord.Domain.Common.Exceptions;
@@ -81,6 +82,9 @@ public static class ErrorHandlingMiddleware
             NpgsqlException npgsqlEx => (
                 StatusCodes.Status503ServiceUnavailable, "DATABASE_UNAVAILABLE",
                 "Database ချိတ်ဆက်မှု ပြဿနာဖြစ်နေပါသည် — ခဏနေပြီး ပြန်ကြိုးစားပါ။", null),
+            DbUpdateException => (
+                StatusCodes.Status503ServiceUnavailable, "DATABASE_UPDATE_FAILED",
+                "Database update မအောင်မြင်ပါ — ခဏနေပြီး ပြန်ကြိုးစားပါ။", null),
             ObjectDisposedException => (
                 StatusCodes.Status503ServiceUnavailable, "SERVICE_UNAVAILABLE",
                 "Service ခေတ္တမလုပ်နိုင်သေးပါ — ခဏနေပြီး ပြန်ကြိုးစားပါ။", null),
