@@ -101,7 +101,7 @@ public class TxnCommandValidatorTests
     {
         var txn = Transaction.Complete(
             "TXN-2026-00001", TransactionType.CashIn, 100_000, 500, true,
-            null, FeePaidVia.Cash, null, "Daw Hla Hla", "09770001112", 1, 1,
+            null, FeePaidVia.Cash, false, null, "Daw Hla Hla", "09770001112", 1, 1,
             Guid.NewGuid(), null, null, 1, new FixedClock(), shopId: 1);
 
         txn.IsCompleted.Should().BeTrue();

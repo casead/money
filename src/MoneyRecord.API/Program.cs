@@ -166,33 +166,36 @@ var host = Host.CreateDefaultBuilder(args)
                 });
             });
 
+            // Run DB migrations synchronously BEFORE accepting requests.
+            // This ensures columns exist before the first request arrives.
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VERCEL")))
+            {
+                try
+                {
+                    using var scope = app.ApplicationServices.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
+                    db.Database.ExecuteSqlRaw(
+                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
+                    db.Database.ExecuteSqlRaw(
+                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"IsBookmarked\" boolean NOT NULL DEFAULT false");
+                    db.Database.ExecuteSqlRaw(
+                        "DROP INDEX IF EXISTS \"UQ_WalletAccounts_AccountNumber\"");
+                    db.Database.ExecuteSqlRaw(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
+                        "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
+                        "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
+                    db.Database.ExecuteSqlRaw(
+                        "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"FeeDeductedFromAmount\" boolean NOT NULL DEFAULT false");
+                    db.Database.ExecuteSqlRaw(
+                        "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"NetAmount\" bigint");
+                }
+                catch { /* already migrated or DB not ready */ }
+            }
+
             // Seed admin on first run (checks if already exists)
-            // Run asynchronously to avoid blocking the synchronous Configure lambda.
             _ = Task.Run(async () =>
             {
                 using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
-                if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VERCEL")))
-                {
-                    try
-                    {
-                        db.Database.ExecuteSqlRaw(
-                            "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
-                        db.Database.ExecuteSqlRaw(
-                            "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"IsBookmarked\" boolean NOT NULL DEFAULT false");
-                        db.Database.ExecuteSqlRaw(
-                            "DROP INDEX IF EXISTS \"UQ_WalletAccounts_AccountNumber\"");
-                        db.Database.ExecuteSqlRaw(
-                            "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
-                            "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
-                            "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
-                        db.Database.ExecuteSqlRaw(
-                            "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"FeeDeductedFromAmount\" boolean NOT NULL DEFAULT false");
-                        db.Database.ExecuteSqlRaw(
-                            "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"NetAmount\" bigint");
-                    }
-                    catch { /* already migrated or DB not ready */ }
-                }
                 await AdminSeeder.SeedAsync(scope.ServiceProvider);
             });
 
