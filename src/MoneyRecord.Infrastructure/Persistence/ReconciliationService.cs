@@ -25,6 +25,7 @@ public sealed record ReconciliationResult(
 /// <summary>
 /// M7 core: cache-vs-ledger reconciliation + BalanceAfter chain verification.
 /// Read-only against business data; writes LastReconciledAtUtc + audit row only.
+/// MongoDB-compatible: uses LINQ aggregation instead of raw SQL.
 /// </summary>
 public sealed class ReconciliationService
 {
@@ -84,9 +85,13 @@ public sealed class ReconciliationService
         var chainGaps = await VerifyChainsAsync(ct);
 
         // Stamp reconciliation time on the shop's cash row.
-        await _db.PhysicalCashAccounts
-            .Where(c => c.Id == CashRowId)
-            .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastReconciledAtUtc, _clock.UtcNow), ct);
+        var cashRow = await _db.PhysicalCashAccounts
+            .FirstOrDefaultAsync(c => c.Id == CashRowId, ct);
+        if (cashRow is not null)
+        {
+            cashRow.StampReconciled(_clock.UtcNow);
+            await _db.SaveChangesAsync(ct);
+        }
 
         return new ReconciliationResult(_clock.UtcNow, drifts, chainGaps);
     }
@@ -96,8 +101,13 @@ public sealed class ReconciliationService
         var cash = await _db.PhysicalCashAccounts.AsNoTracking()
             .FirstOrDefaultAsync(c => c.Id == CashRowId, ct);
         // Shop-scoped: only entries created by this shop's users count (M11).
+        var shopUserIds = await _db.Users.AsNoTracking()
+            .Where(u => u.ShopId == CashRowId)
+            .Select(u => u.Id)
+            .ToListAsync(ct);
+
         var sums = await _db.CashLedgerEntries.AsNoTracking()
-            .Where(e => _db.Users.Any(u => u.Id == e.CreatedByUserId && u.ShopId == CashRowId))
+            .Where(e => shopUserIds.Contains(e.CreatedByUserId))
             .GroupBy(e => e.Direction)
             .Select(g => new { g.Key, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
@@ -114,15 +124,19 @@ public sealed class ReconciliationService
     /// <summary>
     /// Chain rule per scope: first entry's BalanceAfter must equal its signed amount;
     /// each subsequent entry's BalanceAfter must equal previous +/− amount (ordered by Id).
-    /// Implemented in SQL for scan efficiency; returns total gap count across all scopes.
     /// </summary>
     private async Task<int> VerifyChainsAsync(CancellationToken ct)
     {
         var gaps = 0;
 
         // Cash chain — shop-scoped via entry creator's shop (M11 isolation)
+        var shopUserIds = await _db.Users.AsNoTracking()
+            .Where(u => u.ShopId == CashRowId)
+            .Select(u => u.Id)
+            .ToListAsync(ct);
+
         var cashRows = await _db.CashLedgerEntries.AsNoTracking()
-            .Where(e => _db.Users.Any(u => u.Id == e.CreatedByUserId && u.ShopId == CashRowId))
+            .Where(e => shopUserIds.Contains(e.CreatedByUserId))
             .OrderBy(e => e.Id)
             .Select(e => new { e.Id, e.Direction, e.Amount, e.BalanceAfter })
             .ToListAsync(ct);

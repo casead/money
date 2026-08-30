@@ -3,6 +3,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 using MoneyRecord.Application;
 using MoneyRecord.Application.Audit.Queries;
 using MoneyRecord.Application.Balances.Commands;
@@ -19,15 +20,15 @@ namespace MoneyRecord.IntegrationTests;
 
 /// <summary>
 /// TC-1000 reports/settings/audit suite (Module 10):
-/// dashboardâ†”list consistency, correction netting, staff profit stripping,
+/// dashboard list consistency, correction netting, staff profit stripping,
 /// day-boundary BusinessDate bucketing, empty ranges, settings guards + audit.
 /// </summary>
-[Collection("sql")]
+[Collection("mongo")]
 public class ReportsIntegrationTests : IAsyncLifetime
 {
-    private readonly PostgreSqlFixture _fx;
+    private readonly MongoDbFixture _fx;
 
-    public ReportsIntegrationTests(PostgreSqlFixture fx) => _fx = fx;
+    public ReportsIntegrationTests(MongoDbFixture fx) => _fx = fx;
 
     private long _accountId;
 
@@ -69,7 +70,7 @@ public class ReportsIntegrationTests : IAsyncLifetime
         Amount = amount
     };
 
-    // ---- TC-1000a: dashboard totals == Î£ same-day filtered txn list ----
+    // ---- TC-1000a: dashboard totals == same-day filtered txn list ----
 
     [Fact]
     public async Task TC1000a_DashboardTiesOut_WithTxnAggregates()
@@ -114,14 +115,15 @@ public class ReportsIntegrationTests : IAsyncLifetime
         var create = await sender.Send(In(10_000));
         create.IsSuccess.Should().BeTrue();
 
-        // Rewrite BusinessDate to yesterday â€” simulating a prior-day transaction.
+        // Rewrite BusinessDate to yesterday -- simulating a prior-day transaction.
         using (var s2 = _fx.CreateScope())
         {
-            var db = s2.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
-            var row = await db.Transactions.SingleAsync(t => t.TxnNo == create.Value!.TxnNo);
+            var mongoDb = s2.ServiceProvider.GetRequiredService<IMongoDatabase>();
+            var collection = mongoDb.GetCollection<Transaction>("transactions");
             var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-            await db.Database.ExecuteSqlInterpolatedAsync($@"
-                UPDATE ""Transactions"" SET ""BusinessDate"" = {yesterday} WHERE ""Id"" = {row.Id}");
+            var filter = Builders<Transaction>.Filter.Eq(t => t.TxnNo, create.Value!.TxnNo);
+            var update = Builders<Transaction>.Update.Set(t => t.BusinessDate, yesterday);
+            await collection.UpdateOneAsync(filter, update);
         }
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -151,14 +153,15 @@ public class ReportsIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task TC1000c_StaffScopes_StripProfitFields()
     {
-        // Staff-context handler run: TestCurrentUser(roleId=2) â†’ profit stripped.
+        // Staff-context handler run: TestCurrentUser(roleId=2) -> profit stripped.
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddApplication();
         services.AddInfrastructure(new Microsoft.Extensions.Configuration.ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:MoneyRecord"] = _fx.ConnectionString
+                ["ConnectionStrings:MoneyRecord"] = _fx.ConnectionString,
+                ["MongoDb:DatabaseName"] = _fx.DbName
             }).Build());
         services.AddScoped<ICurrentUser>(_ => new TestCurrentUser(
             Domain.Common.Rbac.RolePermissionRegistry.StaffRoleId));
@@ -201,7 +204,7 @@ public class ReportsIntegrationTests : IAsyncLifetime
         var withBom = System.Text.Encoding.UTF8.GetPreamble()
             .Concat(bytes).ToArray();
 
-        withBom[0].Should().Be(0xEF); // UTF-8 BOM present â†’ Excel detects encoding
+        withBom[0].Should().Be(0xEF); // UTF-8 BOM present -> Excel detects encoding
         withBom[1].Should().Be(0xBB);
         withBom[2].Should().Be(0xBF);
         csv.Split("\r\n").Should().HaveCount(rows.Count);
@@ -241,19 +244,19 @@ public class ReportsIntegrationTests : IAsyncLifetime
         using var scope = _fx.CreateScope();
         var sender = scope.ServiceProvider.GetRequiredService<ISender>();
 
-        // Unknown key â†’ validation failure
+        // Unknown key -> validation failure
         var unknown = await sender.Send(new UpdateSettingsCommand(
             new Dictionary<string, string> { ["nope"] = "x" }, ConfirmSensitive: false));
         unknown.IsSuccess.Should().BeFalse();
 
-        // Sensitive key without confirm â†’ CONFLICT_STATE + reason extension
+        // Sensitive key without confirm -> CONFLICT_STATE + reason extension
         var sensitive = await sender.Send(new UpdateSettingsCommand(
             new Dictionary<string, string> { ["dayBoundaryOffsetHours"] = "2" },
             ConfirmSensitive: false));
         sensitive.IsSuccess.Should().BeFalse();
         sensitive.Extensions!["reason"].Should().Be("SENSITIVE_CHANGE");
 
-        // With confirm â†’ success + audited
+        // With confirm -> success + audited
         var ok = await sender.Send(new UpdateSettingsCommand(
             new Dictionary<string, string> { ["shopName"] = "á€…á€™á€ºá€¸á€žá€•á€ºá€†á€­á€¯á€„á€º",
                 ["dayBoundaryOffsetHours"] = "2" },
@@ -286,7 +289,8 @@ public class ReportsIntegrationTests : IAsyncLifetime
         services.AddInfrastructure(new Microsoft.Extensions.Configuration.ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:MoneyRecord"] = _fx.ConnectionString
+                ["ConnectionStrings:MoneyRecord"] = _fx.ConnectionString,
+                ["MongoDb:DatabaseName"] = _fx.DbName
             }).Build());
         services.AddScoped<ICurrentUser>(_ => new TestCurrentUser(
             Domain.Common.Rbac.RolePermissionRegistry.StaffRoleId));
@@ -301,5 +305,3 @@ public class ReportsIntegrationTests : IAsyncLifetime
             new[] { "shopName", "receiptFooterText", "feePercentCashIn", "feePercentCashOut" });
     }
 }
-
-

@@ -38,6 +38,12 @@ public class PhysicalCashAccount
     /// <summary>Legacy constant — now means "the default/first shop" id.</summary>
     public const int SingletonId = 1;
 
+    /// <summary>Stamp reconciliation time (called by ReconciliationService).</summary>
+    public void StampReconciled(DateTime utcNow)
+    {
+        LastReconciledAtUtc = utcNow;
+    }
+
     /// <summary>T4 adjustment apply — caller holds UPDLOCK and has passed BR-034 guard.</summary>
     public void ApplyAdjustment(LedgerDirection direction, long amount,
         long actorUserId, IClock clock)

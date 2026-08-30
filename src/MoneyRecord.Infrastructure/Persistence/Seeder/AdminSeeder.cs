@@ -7,7 +7,7 @@ namespace MoneyRecord.Infrastructure.Persistence.Seeding;
 
 /// <summary>
 /// Seeds the initial Admin account on first run (bootstrap — no login possible before it exists).
-/// Username: admin / Password from env MONEYRECORD_ADMIN_PASSWORD (default dev-only).
+/// MongoDB-compatible: uses collection queries instead of raw SQL.
 /// </summary>
 public static class AdminSeeder
 {
@@ -18,10 +18,9 @@ public static class AdminSeeder
         var db = services.GetRequiredService<MoneyRecordDbContext>();
         var hasher = services.GetRequiredService<IPasswordHasher>();
         var clock = services.GetRequiredService<Application.Common.Interfaces.IClock>();
-        var logger = services.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MoneyRecordDbContext>>();
+        var logger = services.GetRequiredService<ILogger<MoneyRecordDbContext>>();
 
-        // Ensure database exists (lightweight — no migration check).
-        // Migrations should be applied via CI/CD, not on every startup.
+        // Ensure database exists (lightweight — MongoDB creates on first write).
         await db.Database.EnsureCreatedAsync();
 
         if (!await db.Users.IgnoreQueryFilters().AnyAsync(u => u.Username == DefaultAdminUsername))

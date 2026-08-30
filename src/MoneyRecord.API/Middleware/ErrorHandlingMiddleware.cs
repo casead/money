@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MoneyRecord.Application.Common.Exceptions;
 using MoneyRecord.Domain.Common.Errors;
 using MoneyRecord.Domain.Common.Exceptions;
-using Npgsql;
+using MongoDB.Driver;
 
 namespace MoneyRecord.API.Middleware;
 
@@ -79,7 +79,7 @@ public static class ErrorHandlingMiddleware
             UnauthorizedAccessException => (StatusCodes.Status403Forbidden, ErrorCodes.Forbidden,
                 "ခွင့်ပြုချက် မရှိပါ။", null),
             // DB connection / transient failures → 503 (not 500) so callers can retry
-            NpgsqlException npgsqlEx => (
+            MongoException mongoEx => (
                 StatusCodes.Status503ServiceUnavailable, "DATABASE_UNAVAILABLE",
                 "Database ချိတ်ဆက်မှု ပြဿနာဖြစ်နေပါသည် — ခဏနေပြီး ပြန်ကြိုးစားပါ။", null),
             DbUpdateException => (

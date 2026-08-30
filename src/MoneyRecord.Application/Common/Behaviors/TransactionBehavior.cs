@@ -37,48 +37,40 @@ public sealed class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior
         {
             try
             {
-                // EF Core execution strategy handles transient retries around the whole transaction
-                // when EnableRetryOnFailure is configured — use it explicitly to avoid nested-strategy errors.
-                var response = await _db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+                await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+                try
                 {
-                    await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
-                    try
-                    {
-                        var result = await next();
-                        await _db.SaveChangesAsync(cancellationToken);
-                        await tx.CommitAsync(cancellationToken);
-                        return result;
-                    }
-                    catch
-                    {
-                        await tx.RollbackAsync(cancellationToken);
-                        throw;
-                    }
-                });
-
-                return response!;
+                    var result = await next();
+                    await _db.SaveChangesAsync(cancellationToken);
+                    await tx.CommitAsync(cancellationToken);
+                    return result!;
+                }
+                catch
+                {
+                    await tx.RollbackAsync(cancellationToken);
+                    throw;
+                }
             }
-            catch (DbUpdateException ex) when (IsTransient(ex) && attempt < maxAttempts)
+            catch (Exception ex) when (IsTransient(ex) && attempt < maxAttempts)
             {
-                // Attempt-N tracked entities (idempotency reservation, txn, ledger rows)
-                // must not leak into the next attempt — clear stale state.
                 await _db.ClearTrackedEntitiesAsync(cancellationToken);
                 _logger.LogWarning(ex, "Transient DB failure on {Request}, retrying ({Attempt}/{Max}).",
                     typeof(TRequest).Name, attempt, maxAttempts);
+                await Task.Delay(100 * attempt, cancellationToken);
             }
             catch
             {
-                // Terminal failure: the transaction is already rolled back; purge tracked
-                // entities so a scope reused for another request never inherits stale state.
                 await _db.ClearTrackedEntitiesAsync(CancellationToken.None);
                 throw;
             }
         }
     }
 
-    private static bool IsTransient(DbUpdateException ex) =>
-        ex.InnerException?.Message.Contains("deadlock", StringComparison.OrdinalIgnoreCase) == true ||
-        ex.InnerException?.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsTransient(Exception ex) =>
+        ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("TransientTransactionError", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("connection", StringComparison.OrdinalIgnoreCase) ||
+        ex.InnerException is not null && IsTransient(ex.InnerException);
 }
 
 /// <summary>Marker for state-changing requests that must run inside a transaction.</summary>

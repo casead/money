@@ -16,14 +16,14 @@ namespace MoneyRecord.IntegrationTests;
 /// TC-900 fees suite v2 (percent-only engine): separate Cash-In/Cash-Out rates,
 /// Half-Up rounding golden edge, settings-snapshot immutability (TC-900c),
 /// staff override policy (TC-900d). Legacy rule-CRUD guards (overlap/immutable)
-/// still covered — the module remains but no longer feeds the calculator.
+/// still covered -- the module remains but no longer feeds the calculator.
 /// </summary>
-[Collection("sql")]
+[Collection("mongo")]
 public class FeesIntegrationTests : IAsyncLifetime
 {
-    private readonly PostgreSqlFixture _fx;
+    private readonly MongoDbFixture _fx;
 
-    public FeesIntegrationTests(PostgreSqlFixture fx) => _fx = fx;
+    public FeesIntegrationTests(MongoDbFixture fx) => _fx = fx;
 
     private long _accountId;
     private int _providerId;
@@ -45,7 +45,7 @@ public class FeesIntegrationTests : IAsyncLifetime
         _providerId = (await db.WalletAccounts.AsNoTracking()
             .SingleAsync(a => a.Id == _accountId)).WalletProviderId;
 
-        // Neutral start for every test — explicit rates below.
+        // Neutral start for every test -- explicit rates below.
         await SetRatesAsync(sender, ("feePercentCashIn", "0"), ("feePercentCashOut", "0"));
     }
 
@@ -73,7 +73,7 @@ public class FeesIntegrationTests : IAsyncLifetime
         FeePaidVia = "cash"
     };
 
-    // ---- TC-900a: percent-only math — separate in/out rates + Half-Up ----
+    // ---- TC-900a: percent-only math -- separate in/out rates + Half-Up ----
 
     [Fact]
     public async Task TC900a_PercentEngine_SeparateRates_AndHalfUpRounding()
@@ -84,7 +84,7 @@ public class FeesIntegrationTests : IAsyncLifetime
         await SetRatesAsync(sender,
             ("feePercentCashIn", "2.5"), ("feePercentCashOut", "1"));
 
-        // Half-Up golden edge: 2.5% of 33,333 → 833.325 → 833
+        // Half-Up golden edge: 2.5% of 33,333 -> 833.325 -> 833
         var preview1 = await sender.Send(new PreviewFeeQuery(
             TransactionType.CashIn, 33_333));
         preview1.Value!.FeeAmount.Should().Be(833);
@@ -137,7 +137,7 @@ public class FeesIntegrationTests : IAsyncLifetime
         row.FeeAmount.Should().Be(1000);
         row.GrossProfit.Should().Be(1000); // BR-016 per-txn profit intact
 
-        // …while new txns pick up the new rate
+        // ...while new txns pick up the new rate
         var next = await sender.Send(In(10_000));
         next.IsSuccess.Should().BeTrue();
         next.Value!.FeeAmount.Should().Be(900); // 9% of 10,000
@@ -159,7 +159,7 @@ public class FeesIntegrationTests : IAsyncLifetime
         create.Value!.ShowProfitFields.Should().BeTrue(); // admin actor sees profit fields
     }
 
-    // ---- TC-900e: profit invariant across seeded day (fees − commissions) ----
+    // ---- TC-900e: profit invariant across seeded day (fees - commissions) ----
 
     [Fact]
     public async Task TC900e_ProfitInvariant_FeesMinusCommissions()
@@ -183,7 +183,7 @@ public class FeesIntegrationTests : IAsyncLifetime
             .ToListAsync();
         txnsToday.Should().NotBeEmpty();
 
-        // Per-txn invariant: GrossProfit == Fee − Commission (BR-016)
+        // Per-txn invariant: GrossProfit == Fee - Commission (BR-016)
         txnsToday.ForEach(t => t.GrossProfit.Should().Be(t.FeeAmount - t.CommissionAmount));
     }
 
@@ -196,7 +196,7 @@ public class FeesIntegrationTests : IAsyncLifetime
         var sender = scope.ServiceProvider.GetRequiredService<ISender>();
 
         var rule = await sender.Send(FlatRule(600));
-        rule.IsSuccess.Should().BeTrue(); // effectiveFrom = today → in force immediately
+        rule.IsSuccess.Should().BeTrue(); // effectiveFrom = today -> in force immediately
 
         var update = await sender.Send(new UpdateFeeRuleCommand(
             rule.Value!.Id, 777, null, null, null, null));

@@ -12,15 +12,15 @@ using MoneyRecord.Domain.Entities;
 namespace MoneyRecord.IntegrationTests;
 
 /// <summary>
-/// TC-600 automated suite (real SQL Server, real transactions, real UPDLOCKs).
-/// Golden examples replay BRL Â§4.C/Â§4.D; storm covers TC-600d concurrent semantics.
+/// TC-600 automated suite (real transactions, real locks).
+/// Golden examples replay BRL 4.C/4.D; storm covers TC-600d concurrent semantics.
 /// </summary>
-[Collection("sql")]
+[Collection("mongo")]
 public class TxnEngineIntegrationTests : IAsyncLifetime
 {
-    private readonly PostgreSqlFixture _fx;
+    private readonly MongoDbFixture _fx;
 
-    public TxnEngineIntegrationTests(PostgreSqlFixture fx) => _fx = fx;
+    public TxnEngineIntegrationTests(MongoDbFixture fx) => _fx = fx;
 
     private long _accountId;
     private long _cashBaseline;
@@ -47,7 +47,7 @@ public class TxnEngineIntegrationTests : IAsyncLifetime
         _txnCountBaseline = await db.Transactions.CountAsync();
     }
 
-    /// <summary>LOCK_TIMEOUT (409) is valid backpressure — clients retry (API-007 §13.1).</summary>
+    /// <summary>LOCK_TIMEOUT (409) is valid backpressure -- clients retry (API-007 13.1).</summary>
     private static async Task<Result<TxnReceiptResponse>> RetryIn(
         ISender sender, Func<CreateCashInCommand> factory, int maxAttempts = 4)
     {
@@ -100,7 +100,7 @@ public class TxnEngineIntegrationTests : IAsyncLifetime
         return (cash.CurrentCashBalance, acc.CurrentFloatBalance);
     }
 
-    // ---- TC-600a: BRL Â§4.C.3 golden example ----
+    // ---- TC-600a: BRL 4.C.3 golden example ----
 
     [Fact]
     public async Task TC600a_CashIn_GoldenExample_MovesBalancesExactly()
@@ -120,8 +120,8 @@ public class TxnEngineIntegrationTests : IAsyncLifetime
         receipt.ProfitAmount.Should().Be(0);
 
         var (cash, float_) = await ReadBalancesAsync();
-        cash.Should().Be(_cashBaseline + 100_000);    // cash â†‘ amount
-        float_.Should().Be(OpeningFloat - 100_000);   // float â†“ amount
+        cash.Should().Be(_cashBaseline + 100_000);    // cash up amount
+        float_.Should().Be(OpeningFloat - 100_000);   // float down amount
 
         // Exactly TWO transaction-sourced ledger entries with chained BalanceAfter
         using var scope2 = _fx.CreateScope();
@@ -153,8 +153,8 @@ public class TxnEngineIntegrationTests : IAsyncLifetime
         result.IsSuccess.Should().BeTrue();
 
         var (cash, float_) = await ReadBalancesAsync();
-        cash.Should().Be(_cashBaseline - 40_000);   // cash â†“
-        float_.Should().Be(OpeningFloat + 40_000);  // float â†‘
+        cash.Should().Be(_cashBaseline - 40_000);   // cash down
+        float_.Should().Be(OpeningFloat + 40_000);  // float up
     }
 
     [Fact]
@@ -315,12 +315,10 @@ public class TxnEngineIntegrationTests : IAsyncLifetime
             .ToListAsync();
         var inc = sums.FirstOrDefault(s => s.Key == LedgerDirection.Increase)?.Total ?? 0;
         var dec = sums.FirstOrDefault(s => s.Key == LedgerDirection.Decrease)?.Total ?? 0;
-        // Engine semantics: Cash In ⇒ wallet Decrease; Cash Out ⇒ wallet Increase.
+        // Engine semantics: Cash In -> wallet Decrease; Cash Out -> wallet Increase.
         // So the transaction-sourced ledger delta must equal the float-cache delta
-        // since account creation (OpeningFloat): no drift between Σledger and cache.
+        // since account creation (OpeningFloat): no drift between ledger and cache.
         (inc - dec).Should().Be(float_ - OpeningFloat,
-            "Σtransaction-ledger delta must equal float-cache delta (no drift)");
+            "transaction-ledger delta must equal float-cache delta (no drift)");
     }
 }
-
-

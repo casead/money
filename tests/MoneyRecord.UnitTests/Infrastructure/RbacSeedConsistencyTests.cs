@@ -1,6 +1,6 @@
 using FluentAssertions;
 using MoneyRecord.Domain.Common.Rbac;
-using MoneyRecord.Infrastructure.Persistence.Configurations;
+using MoneyRecord.Infrastructure.Persistence;
 
 namespace MoneyRecord.UnitTests.Infrastructure;
 
@@ -13,7 +13,7 @@ public class RbacSeedConsistencyTests
     [Fact]
     public void PermissionSeeds_Mirror_RegistryCatalog()
     {
-        var seeds = PermissionConfiguration.BuildSeeds();
+        var seeds = MoneyRecordDbContext.BuildPermissionSeeds();
 
         seeds.Select(p => p.Code)
             .Should().BeEquivalentTo(Permissions.All);
@@ -24,8 +24,8 @@ public class RbacSeedConsistencyTests
     [Fact]
     public void RolePermissionSeeds_Mirror_RoleRegistry()
     {
-        var seeds = RolePermissionConfiguration.BuildSeeds();
-        var codeById = PermissionConfiguration.BuildSeeds()
+        var seeds = MoneyRecordDbContext.BuildRolePermissionSeeds();
+        var codeById = MoneyRecordDbContext.BuildPermissionSeeds()
             .ToDictionary(p => p.Id, p => p.Code);
 
         // ShopAdmin ("Admin", role 2): shop-side catalog only (M11)

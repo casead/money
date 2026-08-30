@@ -20,7 +20,7 @@ using MoneyRecord.Infrastructure;
 using MoneyRecord.Infrastructure.Persistence;
 using MoneyRecord.Infrastructure.Persistence.Seeding;
 using MoneyRecord.Infrastructure.Security;
-using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 
 // Build config WITHOUT file watchers (avoids inotify crash on Render free tier).
 var configuration = new ConfigurationBuilder()
@@ -122,8 +122,7 @@ var host = Host.CreateDefaultBuilder(args)
             });
 
             // Health checks
-            services.AddHealthChecks()
-                .AddDbContextCheck<MoneyRecordDbContext>("database", tags: ["ready"]);
+            services.AddHealthChecks();
         });
         webBuilder.Configure(app =>
         {
@@ -162,13 +161,11 @@ var host = Host.CreateDefaultBuilder(args)
                 });
                 endpoints.MapHealthChecks("/health/ready", new HealthCheckOptions
                 {
-                    Predicate = check => check.Tags.Contains("ready")
+                    Predicate = _ => false
                 });
             });
 
-            // Run DB migrations in background (non-blocking).
-            // ADD COLUMN IF NOT EXISTS is idempotent — safe to run on every cold start.
-            // Single batch SQL to minimize DB roundtrips and CPU usage.
+            // Create MongoDB indexes in background (non-blocking).
             _ = Task.Run(async () =>
             {
                 for (int attempt = 1; attempt <= 3; attempt++)
@@ -176,21 +173,15 @@ var host = Host.CreateDefaultBuilder(args)
                     try
                     {
                         using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
-                        var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
-                        await db.Database.ExecuteSqlRawAsync(@"
-                            ALTER TABLE ""Customers"" ADD COLUMN IF NOT EXISTS ""Source"" varchar(20) NOT NULL DEFAULT 'auto';
-                            ALTER TABLE ""Customers"" ADD COLUMN IF NOT EXISTS ""IsBookmarked"" boolean NOT NULL DEFAULT false;
-                            DROP INDEX IF EXISTS ""UQ_WalletAccounts_AccountNumber"";
-                            CREATE UNIQUE INDEX IF NOT EXISTS ""UQ_WalletAccounts_Provider_AccountNumber""
-                                ON ""WalletAccounts"" (""WalletProviderId"", ""AccountNumber"")
-                                WHERE ""AccountNumber"" IS NOT NULL AND ""IsDeleted"" = false;
-                            ALTER TABLE ""Transactions"" ADD COLUMN IF NOT EXISTS ""FeeDeductedFromAmount"" boolean NOT NULL DEFAULT false;
-                            ALTER TABLE ""Transactions"" ADD COLUMN IF NOT EXISTS ""NetAmount"" bigint;");
+                        var mongoClient = scope.ServiceProvider.GetRequiredService<IMongoClient>();
+                        var database = mongoClient.GetDatabase(
+                            configuration.GetValue<string>("MongoDb:DatabaseName") ?? "moneyrecord");
+                        await MongoIndexInitializer.InitializeAsync(database);
                         return;
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[Migration] Attempt {attempt}/3 failed: {ex.Message}");
+                        Console.WriteLine($"[MongoDB Indexes] Attempt {attempt}/3 failed: {ex.Message}");
                         if (attempt < 3) await Task.Delay(500);
                     }
                 }
@@ -201,19 +192,6 @@ var host = Host.CreateDefaultBuilder(args)
             {
                 using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
                 await AdminSeeder.SeedAsync(scope.ServiceProvider);
-            });
-
-            // Warm up the connection pool so the first real request doesn't pay cold-start latency
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var warmupScope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
-                    var warmupDb = warmupScope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
-                    await warmupDb.Database.OpenConnectionAsync();
-                    await warmupDb.Database.CloseConnectionAsync();
-                }
-                catch { /* non-critical — real requests have retry logic */ }
             });
         });
     })

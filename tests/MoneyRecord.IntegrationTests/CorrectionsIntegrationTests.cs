@@ -2,6 +2,7 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 using MoneyRecord.Application.Balances.Commands;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Application.Transactions.Commands;
@@ -12,16 +13,16 @@ using MoneyRecord.Domain.Entities;
 namespace MoneyRecord.IntegrationTests;
 
 /// <summary>
-/// TC-800 corrections suite (real SQL Server): TXN-006 cancel (BR-021â€¦024) and
-/// TXN-007 reverse (BR-025â€¦028), including EC-03/04 terminal guards and the
-/// BLUE-010 acceptance invariant â€” original rows hash-identical post-correction.
+/// TC-800 corrections suite: TXN-006 cancel (BR-021..024) and
+/// TXN-007 reverse (BR-025..028), including EC-03/04 terminal guards and the
+/// BLUE-010 acceptance invariant -- original rows hash-identical post-correction.
 /// </summary>
-[Collection("sql")]
+[Collection("mongo")]
 public class CorrectionsIntegrationTests : IAsyncLifetime
 {
-    private readonly PostgreSqlFixture _fx;
+    private readonly MongoDbFixture _fx;
 
-    public CorrectionsIntegrationTests(PostgreSqlFixture fx) => _fx = fx;
+    public CorrectionsIntegrationTests(MongoDbFixture fx) => _fx = fx;
 
     private long _accountId;
     private long _cashBaseline;
@@ -162,14 +163,15 @@ public class CorrectionsIntegrationTests : IAsyncLifetime
         var create = await sender.Send(In(50_000));
         create.IsSuccess.Should().BeTrue();
 
-        // Rewrite BusinessDate to yesterday â€” simulating a prior-day transaction.
+        // Rewrite BusinessDate to yesterday -- simulating a prior-day transaction.
         using (var s2 = _fx.CreateScope())
         {
-            var db = s2.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
-            var row = await db.Transactions.SingleAsync(t => t.TxnNo == create.Value!.TxnNo);
+            var mongoDb = s2.ServiceProvider.GetRequiredService<IMongoDatabase>();
+            var collection = mongoDb.GetCollection<Transaction>("transactions");
             var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-            db.Database.ExecuteSqlInterpolated($@"
-                UPDATE ""Transactions"" SET ""BusinessDate"" = {yesterday} WHERE ""Id"" = {row.Id}");
+            var filter = Builders<Transaction>.Filter.Eq(t => t.TxnNo, create.Value!.TxnNo);
+            var update = Builders<Transaction>.Update.Set(t => t.BusinessDate, yesterday);
+            await collection.UpdateOneAsync(filter, update);
         }
 
         var result = await sender.Send(new CancelTransactionCommand(
@@ -248,7 +250,7 @@ public class CorrectionsIntegrationTests : IAsyncLifetime
         var first = await sender.Send(new ReverseTransactionCommand(create.Value!.TxnNo, "first reversal", null, null));
         first.IsSuccess.Should().BeTrue();
 
-        // Reversing the ORIGINAL again â†’ terminal guard
+        // Reversing the ORIGINAL again -> terminal guard
         Func<Task> act = async () => await sender.Send(new ReverseTransactionCommand(create.Value!.TxnNo, "second reversal attempt", null, null));
         await act.Should().ThrowAsync<ConflictStateException>();
 
@@ -273,18 +275,18 @@ public class CorrectionsIntegrationTests : IAsyncLifetime
             create.Value!.TxnNo, "first cancellation", null));
         cancel.IsSuccess.Should().BeTrue();
 
-        // Second cancel â†’ CONFLICT_STATE (EC-03: second sees CANCELLED)
+        // Second cancel -> CONFLICT_STATE (EC-03: second sees CANCELLED)
         Func<Task> reCancel = async () => await sender.Send(new CancelTransactionCommand(
             create.Value!.TxnNo, "second cancellation", null));
         await reCancel.Should().ThrowAsync<ConflictStateException>();
 
-        // Reverse on CANCELLED txn â†’ rejected (EC-04)
+        // Reverse on CANCELLED txn -> rejected (EC-04)
         Func<Task> reverseCancelled = async () => await sender.Send(
             new ReverseTransactionCommand(create.Value!.TxnNo, "reverse cancelled", null, null));
         await reverseCancelled.Should().ThrowAsync<ConflictStateException>();
     }
 
-    // ---- TC-800f: immutability â€” original financial columns hash-identical ----
+    // ---- TC-800f: immutability -- original financial columns hash-identical ----
 
     [Fact]
     public async Task TC800f_OriginalRows_HashIdentical_PostCorrection()
@@ -310,7 +312,7 @@ public class CorrectionsIntegrationTests : IAsyncLifetime
             .Should().Be(hashBeforeOut, "reversed original must be untouched except status");
     }
 
-    // ---- TC-800g: reason validation (5â€“300) â€” FluentValidation throws ----
+    // ---- TC-800g: reason validation (5-300) -- FluentValidation throws ----
 
     [Fact]
     public async Task TC800g_ShortReason_FailsValidation()
@@ -326,5 +328,3 @@ public class CorrectionsIntegrationTests : IAsyncLifetime
         await act.Should().ThrowAsync<MoneyRecord.Application.Common.Exceptions.ValidationException>();
     }
 }
-
-
