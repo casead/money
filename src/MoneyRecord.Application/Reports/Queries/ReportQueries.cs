@@ -91,20 +91,18 @@ public sealed class GetDashboardQueryHandler
                 })
                 .ToListAsync(ct);
 
-        // Day aggregates (netted: only COMPLETED rows) — aggregate in SQL.
-        var dayTotals = await ReportNetting.Netted(_db, date, date, _currentUser.ShopId)
-            .GroupBy(t => 1)
-            .Select(g => new
-            {
-                CashIn = g.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount),
-                CashOut = g.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount),
-                Count = g.Count(),
-                Gross = g.Sum(t => t.FeeAmount - t.CommissionAmount),
-            })
-            .FirstOrDefaultAsync(ct);
-
-        var cashInTotal = dayTotals?.CashIn ?? 0;
-        var cashOutTotal = dayTotals?.CashOut ?? 0;
+        // Day aggregates (netted: only COMPLETED rows) — direct aggregation.
+        var nettedDay = ReportNetting.Netted(_db, date, date, _currentUser.ShopId);
+        var cashInTotal = await nettedDay
+            .Where(t => t.Type == TransactionType.CashIn)
+            .SumAsync(t => t.Amount, ct);
+        var cashOutTotal = await nettedDay
+            .Where(t => t.Type == TransactionType.CashOut)
+            .SumAsync(t => t.Amount, ct);
+        var dayTxnCount = await nettedDay.CountAsync(ct);
+        var dayGross = showProfit
+            ? await nettedDay.SumAsync(t => t.FeeAmount - t.CommissionAmount, ct)
+            : (long?)null;
 
         // Low-balance warnings from settings thresholds (shop-scoped w/ global fallback)
         var cashThreshold = await SettingReader.EffectiveIntAsync(
@@ -127,8 +125,8 @@ public sealed class GetDashboardQueryHandler
                 a.ProviderId, a.ProviderCode, a.CurrentFloatBalance)).ToList(),
             cashInTotal,
             cashOutTotal,
-            dayTotals?.Count ?? 0,
-            showProfit ? dayTotals?.Gross : null,
+            dayTxnCount,
+            dayGross,
             warnings));
     }
 }
@@ -188,42 +186,41 @@ public sealed class GetDailyReportQueryHandler
     {
         var date = request.Date ?? _clock.TodayYangon;
         var shopId = _currentUser.ShopId;
+        var netted = ReportNetting.Netted(_db, date, date, shopId);
 
-        // Aggregate in SQL instead of loading all rows into memory.
-        var byProvider = await ReportNetting.Netted(_db, date, date, shopId)
-            .GroupBy(t => t.WalletProvider.Code)
-            .Select(g => new DailyReportProviderRow(
-                g.Key,
-                g.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount),
-                g.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount),
-                g.Count(),
-                g.Sum(t => t.FeeAmount),
-                g.Sum(t => t.CommissionAmount)))
-            .OrderBy(r => r.ProviderCode)
-            .ToListAsync(ct);
-
-        var totals = await ReportNetting.Netted(_db, date, date, shopId)
-            .GroupBy(t => 1)
-            .Select(g => new
-            {
-                CashIn = g.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount),
-                CashOut = g.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount),
-                Count = g.Count(),
-                Fees = g.Sum(t => t.FeeAmount),
-                Commissions = g.Sum(t => t.CommissionAmount),
-            })
-            .FirstOrDefaultAsync(ct);
+        // Totals — direct aggregation, no GroupBy.
+        var cashInTotal = await netted
+            .Where(t => t.Type == TransactionType.CashIn)
+            .SumAsync(t => t.Amount, ct);
+        var cashOutTotal = await netted
+            .Where(t => t.Type == TransactionType.CashOut)
+            .SumAsync(t => t.Amount, ct);
+        var fees = await netted.SumAsync(t => t.FeeAmount, ct);
+        var commissions = await netted.SumAsync(t => t.CommissionAmount, ct);
+        var txnCount = await netted.CountAsync(ct);
 
         var cancellations = await _db.Transactions.AsNoTracking()
             .CountAsync(t => t.ShopId == shopId
                              && t.BusinessDate == date
                              && t.Status == TransactionStatus.Cancelled, ct);
 
-        var cashInTotal = totals?.CashIn ?? 0;
-        var cashOutTotal = totals?.CashOut ?? 0;
-        var txnCount = totals?.Count ?? 0;
-        var fees = totals?.Fees ?? 0;
-        var commissions = totals?.Commissions ?? 0;
+        // Per-provider breakdown — load lightweight rows, group in memory.
+        var providerRows = await netted
+            .Select(t => new { t.Type, t.Amount, t.FeeAmount, t.CommissionAmount,
+                Code = t.WalletProvider.Code })
+            .ToListAsync(ct);
+
+        var byProvider = providerRows
+            .GroupBy(r => r.Code)
+            .Select(g => new DailyReportProviderRow(
+                g.Key,
+                g.Where(r => r.Type == TransactionType.CashIn).Sum(r => r.Amount),
+                g.Where(r => r.Type == TransactionType.CashOut).Sum(r => r.Amount),
+                g.Count(),
+                g.Sum(r => r.FeeAmount),
+                g.Sum(r => r.CommissionAmount)))
+            .OrderBy(r => r.ProviderCode)
+            .ToList();
 
         return Result<DailyReportResponse>.Success(new DailyReportResponse(
             date, cashInTotal, cashOutTotal, txnCount, cancellations,
@@ -291,46 +288,46 @@ public sealed class GetMonthlyReportQueryHandler
         var from = new DateOnly(year, month, 1);
         var to = from.AddMonths(1).AddDays(-1);
         var shopId = _currentUser.ShopId;
+        var netted = ReportNetting.Netted(_db, from, to, shopId);
 
-        // Aggregate in SQL instead of loading all rows into memory.
-        var byProvider = await ReportNetting.Netted(_db, from, to, shopId)
-            .GroupBy(t => t.WalletProvider.Code)
-            .Select(g => new DailyReportProviderRow(
-                g.Key,
-                g.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount),
-                g.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount),
-                g.Count(),
-                g.Sum(t => t.FeeAmount),
-                g.Sum(t => t.CommissionAmount)))
-            .OrderBy(r => r.ProviderCode)
-            .ToListAsync(ct);
-
-        var totals = await ReportNetting.Netted(_db, from, to, shopId)
-            .GroupBy(t => 1)
-            .Select(g => new
-            {
-                CashIn = g.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount),
-                CashOut = g.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount),
-                Count = g.Count(),
-                Fees = g.Sum(t => t.FeeAmount),
-                Commissions = g.Sum(t => t.CommissionAmount),
-            })
-            .FirstOrDefaultAsync(ct);
+        // Totals — direct aggregation.
+        var cashInTotal = await netted
+            .Where(t => t.Type == TransactionType.CashIn)
+            .SumAsync(t => t.Amount, ct);
+        var cashOutTotal = await netted
+            .Where(t => t.Type == TransactionType.CashOut)
+            .SumAsync(t => t.Amount, ct);
+        var fees = await netted.SumAsync(t => t.FeeAmount, ct);
+        var commissions = await netted.SumAsync(t => t.CommissionAmount, ct);
+        var txnCount = await netted.CountAsync(ct);
 
         var cancellations = await _db.Transactions.AsNoTracking()
             .CountAsync(t => t.ShopId == shopId
                              && t.BusinessDate >= from && t.BusinessDate <= to
                              && t.Status == TransactionStatus.Cancelled, ct);
 
-        var cashInTotal = totals?.CashIn ?? 0;
-        var cashOutTotal = totals?.CashOut ?? 0;
-        var fees = totals?.Fees ?? 0;
-        var commissions = totals?.Commissions ?? 0;
+        // Per-provider breakdown — load rows, group in memory.
+        var providerRows = await netted
+            .Select(t => new { t.Type, t.Amount, t.FeeAmount, t.CommissionAmount,
+                Code = t.WalletProvider.Code })
+            .ToListAsync(ct);
+
+        var byProvider = providerRows
+            .GroupBy(r => r.Code)
+            .Select(g => new DailyReportProviderRow(
+                g.Key,
+                g.Where(r => r.Type == TransactionType.CashIn).Sum(r => r.Amount),
+                g.Where(r => r.Type == TransactionType.CashOut).Sum(r => r.Amount),
+                g.Count(),
+                g.Sum(r => r.FeeAmount),
+                g.Sum(r => r.CommissionAmount)))
+            .OrderBy(r => r.ProviderCode)
+            .ToList();
 
         return Result<MonthlyReportResponse>.Success(new MonthlyReportResponse(
             $"{year:D4}-{month:D2}",
             cashInTotal, cashOutTotal, fees, commissions,
-            fees - commissions, totals?.Count ?? 0, cancellations, byProvider));
+            fees - commissions, txnCount, cancellations, byProvider));
     }
 }
 
@@ -395,47 +392,52 @@ public sealed class GetProfitReportQueryHandler
         var shopId = _currentUser.ShopId;
         var netted = ReportNetting.Netted(_db, from, to, shopId);
 
-        // Aggregate in SQL per dimension — no full row materialization.
+        // Load lightweight rows, aggregate in memory (EF Core can't translate complex GroupBy).
+        var rows = await netted
+            .Select(t => new { t.Type, t.BusinessDate, t.FeeAmount, t.CommissionAmount,
+                Code = t.WalletProvider.Code })
+            .ToListAsync(ct);
+
         List<ProfitReportRow> series;
         switch (request.Dimension)
         {
             case "provider":
-                series = await netted
-                    .GroupBy(t => t.WalletProvider.Code)
+                series = rows
+                    .GroupBy(r => r.Code)
                     .Select(g => new ProfitReportRow(
-                        g.Key, g.Sum(t => t.FeeAmount),
-                        g.Sum(t => t.CommissionAmount),
-                        g.Sum(t => t.FeeAmount) - g.Sum(t => t.CommissionAmount)))
-                    .OrderBy(r => r.Bucket).ToListAsync(ct);
+                        g.Key, g.Sum(r => r.FeeAmount),
+                        g.Sum(r => r.CommissionAmount),
+                        g.Sum(r => r.FeeAmount) - g.Sum(r => r.CommissionAmount)))
+                    .OrderBy(r => r.Bucket).ToList();
                 break;
             case "type":
-                series = await netted
-                    .GroupBy(t => t.Type)
+                series = rows
+                    .GroupBy(r => r.Type)
                     .Select(g => new ProfitReportRow(
-                        g.Key.ToString(), g.Sum(t => t.FeeAmount),
-                        g.Sum(t => t.CommissionAmount),
-                        g.Sum(t => t.FeeAmount) - g.Sum(t => t.CommissionAmount)))
-                    .OrderBy(r => r.Bucket).ToListAsync(ct);
+                        g.Key.ToString(), g.Sum(r => r.FeeAmount),
+                        g.Sum(r => r.CommissionAmount),
+                        g.Sum(r => r.FeeAmount) - g.Sum(r => r.CommissionAmount)))
+                    .OrderBy(r => r.Bucket).ToList();
                 break;
             case "month":
-                series = await netted
-                    .GroupBy(t => new { t.BusinessDate.Year, t.BusinessDate.Month })
+                series = rows
+                    .GroupBy(r => new { r.BusinessDate.Year, r.BusinessDate.Month })
                     .Select(g => new ProfitReportRow(
                         $"{g.Key.Year:D4}-{g.Key.Month:D2}",
-                        g.Sum(t => t.FeeAmount),
-                        g.Sum(t => t.CommissionAmount),
-                        g.Sum(t => t.FeeAmount) - g.Sum(t => t.CommissionAmount)))
-                    .OrderBy(r => r.Bucket).ToListAsync(ct);
+                        g.Sum(r => r.FeeAmount),
+                        g.Sum(r => r.CommissionAmount),
+                        g.Sum(r => r.FeeAmount) - g.Sum(r => r.CommissionAmount)))
+                    .OrderBy(r => r.Bucket).ToList();
                 break;
             default: // "day"
-                series = await netted
-                    .GroupBy(t => t.BusinessDate)
+                series = rows
+                    .GroupBy(r => r.BusinessDate)
                     .Select(g => new ProfitReportRow(
                         g.Key.ToString("yyyy-MM-dd"),
-                        g.Sum(t => t.FeeAmount),
-                        g.Sum(t => t.CommissionAmount),
-                        g.Sum(t => t.FeeAmount) - g.Sum(t => t.CommissionAmount)))
-                    .OrderBy(r => r.Bucket).ToListAsync(ct);
+                        g.Sum(r => r.FeeAmount),
+                        g.Sum(r => r.CommissionAmount),
+                        g.Sum(r => r.FeeAmount) - g.Sum(r => r.CommissionAmount)))
+                    .OrderBy(r => r.Bucket).ToList();
                 break;
         }
 
