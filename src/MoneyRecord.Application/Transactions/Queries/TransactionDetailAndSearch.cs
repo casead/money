@@ -60,47 +60,46 @@ public sealed class GetTransactionQueryHandler
     {
         var showProfit = ProfitVisibility.ShowProfit(_currentUser);
 
-        var txn = await _db.Transactions.AsNoTracking()
+        // Single JOIN query for transaction + provider + account (3 nav properties exist).
+        var result = await _db.Transactions.AsNoTracking()
             .Where(t => t.TxnNo == request.TxnNo
-                        && t.ShopId == _currentUser.ShopId) // tenant guard (M11)
+                        && t.ShopId == _currentUser.ShopId)
             .Select(t => new
             {
                 t.TxnNo, t.Type, t.Status, t.Amount, t.FeeAmount, t.FeeOverridden,
                 t.CommissionAmount, t.CustomerId, t.CustomerNameSnapshot,
-                t.CustomerPhoneSnapshot, t.WalletProviderId, t.WalletAccountId,
-                t.Note, t.BusinessDate, t.OccurredAtUtc, t.CreatedByUserId,
-                t.CancelledAtUtc, t.ReversalOfTxnId
+                t.CustomerPhoneSnapshot, t.Note, t.BusinessDate, t.OccurredAtUtc,
+                t.CreatedByUserId, t.CancelledAtUtc, t.ReversalOfTxnId,
+                ProviderCode = t.WalletProvider.Code,
+                AccountName = t.WalletAccount.AccountName,
             })
             .FirstOrDefaultAsync(ct);
-        if (txn is null)
+
+        if (result is null)
             return Result<TransactionDetailResponse>.Failure(
                 ErrorCodes.NotFound, "Transaction ရှာမတွေ့ပါ။");
 
-        var providerCode = await _db.WalletProviders
-            .Where(p => p.Id == txn.WalletProviderId).Select(p => p.Code)
-            .FirstAsync(ct);
-        var accountName = await _db.WalletAccounts
-            .Where(a => a.Id == txn.WalletAccountId).Select(a => a.AccountName)
-            .FirstAsync(ct);
+        // CreatedByUser has no nav property on Transaction — single extra query.
         var byUser = await _db.Users
-            .Where(u => u.Id == txn.CreatedByUserId).Select(u => u.Username)
-            .FirstOrDefaultAsync(ct) ?? $"user:{txn.CreatedByUserId}";
+            .Where(u => u.Id == result.CreatedByUserId).Select(u => u.Username)
+            .FirstOrDefaultAsync(ct) ?? $"user:{result.CreatedByUserId}";
+
         string? reversalOfTxnNo = null;
-        if (txn.ReversalOfTxnId is { } rid)
+        if (result.ReversalOfTxnId is { } rid)
             reversalOfTxnNo = await _db.Transactions
                 .Where(t => t.Id == rid).Select(t => t.TxnNo)
                 .FirstOrDefaultAsync(ct);
 
         return Result<TransactionDetailResponse>.Success(new TransactionDetailResponse(
-            txn.TxnNo, txn.Type.ToString(), txn.Status.ToString(),
-            txn.Amount, txn.FeeAmount, txn.FeeOverridden,
+            result.TxnNo, result.Type.ToString(), result.Status.ToString(),
+            result.Amount, result.FeeAmount, result.FeeOverridden,
             showProfit,
-            showProfit ? txn.CommissionAmount : 0,
-            showProfit ? txn.FeeAmount - txn.CommissionAmount : 0,
-            txn.CustomerId, txn.CustomerNameSnapshot, txn.CustomerPhoneSnapshot,
-            providerCode, accountName, txn.Note, txn.BusinessDate,
-            txn.OccurredAtUtc, byUser,
-            txn.CancelledAtUtc?.ToString("O"), reversalOfTxnNo));
+            showProfit ? result.CommissionAmount : 0,
+            showProfit ? result.FeeAmount - result.CommissionAmount : 0,
+            result.CustomerId, result.CustomerNameSnapshot, result.CustomerPhoneSnapshot,
+            result.ProviderCode, result.AccountName, result.Note, result.BusinessDate,
+            result.OccurredAtUtc, byUser,
+            result.CancelledAtUtc?.ToString("O"), reversalOfTxnNo));
     }
 }
 

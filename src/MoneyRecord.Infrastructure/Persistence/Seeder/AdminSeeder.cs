@@ -20,7 +20,9 @@ public static class AdminSeeder
         var clock = services.GetRequiredService<Application.Common.Interfaces.IClock>();
         var logger = services.GetRequiredService<Microsoft.Extensions.Logging.ILogger<MoneyRecordDbContext>>();
 
-        await db.Database.MigrateAsync();
+        // Ensure database exists (lightweight — no migration check).
+        // Migrations should be applied via CI/CD, not on every startup.
+        await db.Database.EnsureCreatedAsync();
 
         if (!await db.Users.IgnoreQueryFilters().AnyAsync(u => u.Username == DefaultAdminUsername))
         {

@@ -18,6 +18,7 @@ using MoneyRecord.Application;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Infrastructure;
 using MoneyRecord.Infrastructure.Persistence;
+using MoneyRecord.Infrastructure.Persistence.Seeding;
 using MoneyRecord.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 
@@ -62,7 +63,8 @@ var host = Host.CreateDefaultBuilder(args)
             services.AddInfrastructure(configuration);
             services.AddControllers();
             services.AddEndpointsApiExplorer();
-            services.AddSwaggerGen();
+            if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development")
+                services.AddSwaggerGen();
 
             // ---- JWT Authentication (ARCH-006 §13) ----
             var jwt = configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
@@ -165,36 +167,30 @@ var host = Host.CreateDefaultBuilder(args)
             });
 
             // Seed admin on first run (checks if already exists)
+            // Run asynchronously to avoid blocking the synchronous Configure lambda.
+            _ = Task.Run(async () =>
             {
                 using var scope = ((IApplicationBuilder)app).ApplicationServices.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<MoneyRecordDbContext>();
-                // Lightweight column add (avoids full Migrate() timeout on free tier)
-                try
+                if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VERCEL")))
                 {
-                    db.Database.ExecuteSqlRaw(
-                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
+                    try
+                    {
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"Source\" varchar(20) NOT NULL DEFAULT 'auto'");
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"IsBookmarked\" boolean NOT NULL DEFAULT false");
+                        db.Database.ExecuteSqlRaw(
+                            "DROP INDEX IF EXISTS \"UQ_WalletAccounts_AccountNumber\"");
+                        db.Database.ExecuteSqlRaw(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
+                            "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
+                            "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
+                    }
+                    catch { /* already migrated or DB not ready */ }
                 }
-                catch { /* column already exists or DB not ready */ }
-                try
-                {
-                    db.Database.ExecuteSqlRaw(
-                        "ALTER TABLE \"Customers\" ADD COLUMN IF NOT EXISTS \"IsBookmarked\" boolean NOT NULL DEFAULT false");
-                }
-                catch { /* column already exists or DB not ready */ }
-                // Fix unique index: AccountNumber → (WalletProviderId, AccountNumber)
-                try
-                {
-                    db.Database.ExecuteSqlRaw(
-                        "DROP INDEX IF EXISTS \"UQ_WalletAccounts_AccountNumber\"");
-                    db.Database.ExecuteSqlRaw(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
-                        "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
-                        "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
-                }
-                catch { /* index already migrated or DB not ready */ }
-                MoneyRecord.Infrastructure.Persistence.Seeding.AdminSeeder
-                    .SeedAsync(scope.ServiceProvider).GetAwaiter().GetResult();
-            }
+                await AdminSeeder.SeedAsync(scope.ServiceProvider);
+            });
 
             // Warm up the connection pool so the first real request doesn't pay cold-start latency
             _ = Task.Run(async () =>
