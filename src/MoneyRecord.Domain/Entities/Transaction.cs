@@ -61,6 +61,12 @@ public class Transaction
     /// <summary>Immutable snapshot — how the fee was collected (cash vs wallet float).</summary>
     public FeePaidVia FeePaidVia { get; private set; }
 
+    /// <summary>When true, fee is deducted from the wallet top-up amount (Amount - Fee = NetAmount).</summary>
+    public bool FeeDeductedFromAmount { get; private set; }
+
+    /// <summary>Net amount credited to customer wallet. Null = not applicable (fee paid separately).</summary>
+    public long? NetAmount { get; private set; }
+
     /// <summary>Provider commission cost snapshot (BR-014). CHECK >= 0.</summary>
     public long CommissionAmount { get; private set; }
 
@@ -124,7 +130,7 @@ public class Transaction
     /// <summary>T1 insert — COMPLETED at birth with full immutable snapshots.</summary>
     public static Transaction Complete(
         string txnNo, TransactionType type, long amount, long feeAmount, bool feeOverridden,
-        int? feeRuleId, FeePaidVia feePaidVia,
+        int? feeRuleId, FeePaidVia feePaidVia, bool feeDeductedFromAmount,
         long? customerId, string customerNameSnapshot, string customerPhoneSnapshot,
         int walletProviderId, long walletAccountId, Guid idempotencyKey,
         string? note, string? referenceNo, long createdByUserId, IClock clock,
@@ -137,6 +143,10 @@ public class Transaction
             throw new BusinessRuleException(ErrorCodes.InvalidOperation,
                 "Fee သည် အနှုတ် မဖြစ်ရ။");
 
+        long? netAmount = feeDeductedFromAmount && feeAmount > 0
+            ? amount - feeAmount
+            : null;
+
         var now = clock.UtcNow;
         return new Transaction
         {
@@ -148,6 +158,8 @@ public class Transaction
             FeeOverridden = feeOverridden,
             FeeRuleId = feeRuleId,
             FeePaidVia = feePaidVia,
+            FeeDeductedFromAmount = feeDeductedFromAmount,
+            NetAmount = netAmount,
             CommissionAmount = 0, // commission capture retrofits in the fee module (M9/BR-014)
             CustomerId = customerId,
             CustomerNameSnapshot = customerNameSnapshot.Trim(),

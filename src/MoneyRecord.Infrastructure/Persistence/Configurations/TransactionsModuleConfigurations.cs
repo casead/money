@@ -64,6 +64,8 @@ public class TransactionConfiguration : IEntityTypeConfiguration<Transaction>
         b.Property(x => x.FeeAmount).HasDefaultValue(0);
         b.ToTable(t => t.HasCheckConstraint("CK_Txn_FeeNonNeg", "\"FeeAmount\" >= 0"));
         b.Property(x => x.FeePaidVia).IsRequired().HasDefaultValue(FeePaidVia.Cash);
+        b.Property(x => x.FeeDeductedFromAmount).HasDefaultValue(false);
+        b.Property(x => x.NetAmount);
         b.Property(x => x.CommissionAmount).HasDefaultValue(0);
         b.ToTable(t => t.HasCheckConstraint("CK_Txn_CommNonNeg", "\"CommissionAmount\" >= 0"));
 

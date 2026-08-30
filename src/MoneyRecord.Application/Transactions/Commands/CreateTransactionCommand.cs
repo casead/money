@@ -31,6 +31,9 @@ public abstract record CreateTxnCommand : ICommand
     /// <summary>'cash' | 'wallet' — how the fee is collected (required, BR-012 ext).</summary>
     public string FeePaidVia { get; init; } = default!;
 
+    /// <summary>When true, fee is deducted from wallet top-up (Amount - Fee = NetAmount). Only valid with FeePaidVia='wallet'.</summary>
+    public bool FeeDeductedFromAmount { get; init; }
+
     public string? Note { get; init; }
 
     /// <summary>Canonical hash for idempotency payload comparison (TC-600e).</summary>
@@ -45,6 +48,7 @@ public abstract record CreateTxnCommand : ICommand
             amount = Amount,
             feeAmountOverride = FeeAmountOverride,
             feePaidVia = FeePaidVia.Trim().ToLowerInvariant(),
+            feeDeductedFromAmount = FeeDeductedFromAmount,
             note = Note
         });
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
@@ -112,6 +116,10 @@ public abstract class CreateTxnCommandValidator<T> : AbstractValidator<T>
             .WithMessage("Fee override သည် အနှုတ် မဖြစ်ရ။");
 
         RuleFor(x => x.Note).MaximumLength(300);
+
+        RuleFor(x => x.FeeDeductedFromAmount)
+            .Must((cmd, v) => !v || cmd.FeePaidVia?.Trim().ToLowerInvariant() == "wallet")
+            .WithMessage("FeeDeductedFromAmount သည် FeePaidVia='wallet' ဖြစ်မှသာ သတ်မှတ်နိုင်ပါသည်။");
     }
 }
 

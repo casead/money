@@ -355,6 +355,7 @@ public sealed class ReverseTransactionCommandHandler
             feeOverridden: false,
             feeRuleId: current.FeeRuleId,
             feePaidVia: current.FeePaidVia,
+            feeDeductedFromAmount: false,
             customerId: current.CustomerId,
             customerNameSnapshot: current.CustomerNameSnapshot,
             customerPhoneSnapshot: current.CustomerPhoneSnapshot,

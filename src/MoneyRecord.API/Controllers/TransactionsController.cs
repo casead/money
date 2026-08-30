@@ -46,6 +46,7 @@ public class TransactionsController : ControllerBase
             FeeAmountOverride = body.FeeAmountOverride,
             FeeOverrideReason = body.FeeOverrideReason,
             FeePaidVia = body.FeePaidVia,
+            FeeDeductedFromAmount = body.FeeDeductedFromAmount,
             Note = body.Note
         }, ct);
 
@@ -82,6 +83,7 @@ public class TransactionsController : ControllerBase
             FeeAmountOverride = body.FeeAmountOverride,
             FeeOverrideReason = body.FeeOverrideReason,
             FeePaidVia = body.FeePaidVia,
+            FeeDeductedFromAmount = body.FeeDeductedFromAmount,
             Note = body.Note
         }, ct);
 
@@ -198,6 +200,7 @@ public class TransactionsController : ControllerBase
         long? FeeAmountOverride,
         string? FeeOverrideReason,
         string FeePaidVia,
+        bool FeeDeductedFromAmount,
         string? Note);
 
     public sealed record TxnCorrectionRequest(string Reason);

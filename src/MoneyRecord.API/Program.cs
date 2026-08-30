@@ -186,6 +186,10 @@ var host = Host.CreateDefaultBuilder(args)
                             "CREATE UNIQUE INDEX IF NOT EXISTS \"UQ_WalletAccounts_Provider_AccountNumber\" " +
                             "ON \"WalletAccounts\" (\"WalletProviderId\", \"AccountNumber\") " +
                             "WHERE \"AccountNumber\" IS NOT NULL AND \"IsDeleted\" = false");
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"FeeDeductedFromAmount\" boolean NOT NULL DEFAULT false");
+                        db.Database.ExecuteSqlRaw(
+                            "ALTER TABLE \"Transactions\" ADD COLUMN IF NOT EXISTS \"NetAmount\" bigint");
                     }
                     catch { /* already migrated or DB not ready */ }
                 }

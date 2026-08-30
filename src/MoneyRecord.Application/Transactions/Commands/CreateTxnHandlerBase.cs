@@ -157,7 +157,7 @@ public abstract class CreateTxnHandlerBase<TCommand>
         // ---- Insert immutable txn row ----
         var txn = Transaction.Complete(
             txnNo, Type, request.Amount, feeAmount, feeOverridden,
-            appliedRuleId, feeVia,
+            appliedRuleId, feeVia, request.FeeDeductedFromAmount,
             customer.Id, request.CustomerName, phone,
             account.WalletProviderId, account.Id, request.IdempotencyKey,
             request.Note, referenceNo: null, actorId, _clock,
@@ -170,20 +170,27 @@ public abstract class CreateTxnHandlerBase<TCommand>
 
         // ---- Dual-ledger writes (BRL §4.C.2 / §4.D.2 + BR-012-ext fee movement) ----
         // Principal: Cash In → cash +A / wallet −A ; Cash Out → cash −A / wallet +A.
+        // Fee deducted: wallet movement uses NetAmount (Amount - Fee) instead of Amount.
         // Fee:       ALWAYS lands on the side the customer paid it —
         //            via Cash → cash +F ; via WalletFloat → wallet +F
         //            (fee paid from the customer's own mobile wallet).
+        //            When FeeDeductedFromAmount=true, fee is NOT separately added
+        //            to wallet float — it's already deducted from the wallet movement.
         var cashDirection = cashIn ? LedgerDirection.Increase : LedgerDirection.Decrease;
         var walletDirection = cashIn ? LedgerDirection.Decrease : LedgerDirection.Increase;
 
+        // Wallet movement: NetAmount when fee deducted, else full Amount.
+        var walletMovementAmount = txn.NetAmount ?? request.Amount;
+
         lockedCash.ApplyAdjustment(cashDirection, request.Amount, actorId, _clock);
         var cashAfterPrincipal = lockedCash.CurrentCashBalance;
-        lockedWallet.ApplyAdjustment(walletDirection, request.Amount, actorId, _clock);
+        lockedWallet.ApplyAdjustment(walletDirection, walletMovementAmount, actorId, _clock);
         var floatAfterPrincipal = lockedWallet.CurrentFloatBalance;
 
         if (feeAmount > 0 && feeVia == FeePaidVia.Cash)
             lockedCash.ApplyAdjustment(LedgerDirection.Increase, feeAmount, actorId, _clock);
-        else if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat)
+        else if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat
+                 && !request.FeeDeductedFromAmount)
             lockedWallet.ApplyAdjustment(LedgerDirection.Increase, feeAmount, actorId, _clock);
 
         var cashEntry = CashLedgerEntry.ForTransactionCore(
@@ -197,11 +204,12 @@ public abstract class CreateTxnHandlerBase<TCommand>
                 lockedCash.CurrentCashBalance, actorId, txn.OccurredAtUtc));
 
         var walletEntry = WalletLedgerEntry.ForTransactionCore(
-            account.Id, txn.Id, walletDirection, request.Amount,
+            account.Id, txn.Id, walletDirection, walletMovementAmount,
             floatAfterPrincipal, actorId, txn.OccurredAtUtc);
         _db.WalletLedgerEntries.Add(walletEntry);
 
-        if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat)
+        if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat
+            && !request.FeeDeductedFromAmount)
             _db.WalletLedgerEntries.Add(WalletLedgerEntry.ForTransactionCore(
                 account.Id, txn.Id, LedgerDirection.Increase, feeAmount,
                 lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
@@ -311,7 +319,7 @@ public abstract class CreateTxnHandlerBase<TCommand>
             txn.Amount,
             txn.FeeAmount,
             txn.FeePaidVia == FeePaidVia.WalletFloat ? "wallet" : "cash",
-            NetAmount: txn.Amount, // principal moved; see fee entries for fee movement
+            NetAmount: txn.NetAmount ?? txn.Amount,
             CommissionAmount: showProfitFields ? txn.CommissionAmount : 0,
             ShowProfitFields: showProfitFields,
             ProfitAmount: showProfitFields ? txn.GrossProfit : 0,
