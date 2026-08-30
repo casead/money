@@ -88,6 +88,15 @@ public static class ErrorHandlingMiddleware
             ObjectDisposedException => (
                 StatusCodes.Status503ServiceUnavailable, "SERVICE_UNAVAILABLE",
                 "Service ခေတ္တမလုပ်နိုင်သေးပါ — ခဏနေပြီး ပြန်ကြိုးစားပါ။", null),
+            NotSupportedException => (
+                StatusCodes.Status500InternalServerError, "UNSUPPORTED_OPERATION",
+                "ဒီ operation ကို support မလုပ်ပါ။", null),
+            FormatException => (
+                StatusCodes.Status500InternalServerError, "CONFIGURATION_ERROR",
+                "Configuration အမှား — connection string စစ်ပါ။", null),
+            InvalidOperationException => (
+                StatusCodes.Status500InternalServerError, "INVALID_OPERATION",
+                "Operation မအောင်မြင်ပါ။", null),
             _ => (StatusCodes.Status500InternalServerError, "INTERNAL_ERROR",
                 "စနစ်အတွင်းပိုင်း အမှားတစ်ခု ဖြစ်ပွားသည်။", null)
         };

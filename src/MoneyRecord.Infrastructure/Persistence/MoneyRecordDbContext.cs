@@ -1,8 +1,11 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.ValueGeneration;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Domain.Common.Rbac;
 using MoneyRecord.Domain.Entities;
 using MongoDB.EntityFrameworkCore.Extensions;
+using MongoDB.Driver;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MoneyRecord.UnitTests")]
 
@@ -16,7 +19,11 @@ public class MoneyRecordDbContext : DbContext
 {
     private readonly IClock? _clock;
 
-    public MoneyRecordDbContext(DbContextOptions<MoneyRecordDbContext> options, IClock? clock = null)
+    /// <summary>Factory to resolve IMongoDatabase for value generators. Set during DI registration.</summary>
+    internal static Func<IServiceProvider, IMongoDatabase>? MongoDatabaseFactory { get; set; }
+
+    public MoneyRecordDbContext(DbContextOptions<MoneyRecordDbContext> options,
+        IClock? clock = null)
         : base(options)
     {
         _clock = clock;
@@ -57,6 +64,7 @@ public class MoneyRecordDbContext : DbContext
         modelBuilder.Entity<Shop>().ToCollection("shops");
         modelBuilder.Entity<Permission>().ToCollection("permissions");
         modelBuilder.Entity<RolePermission>().ToCollection("rolePermissions");
+        modelBuilder.Entity<RolePermission>().HasKey(rp => new { rp.RoleId, rp.PermissionId });
         modelBuilder.Entity<RefreshToken>().ToCollection("refreshTokens");
         modelBuilder.Entity<AuditLog>().ToCollection("auditLogs");
         modelBuilder.Entity<Customer>().ToCollection("customers");
@@ -88,6 +96,31 @@ public class MoneyRecordDbContext : DbContext
         SeedTransactionTypes(modelBuilder);
         SeedTransactionStatuses(modelBuilder);
         SeedAppSettings(modelBuilder);
+
+        // MongoDB value generators for long primary keys
+        if (MongoDatabaseFactory is not null)
+        {
+            var generator = new MongoValueGenerator(() =>
+            {
+                var sp = this.GetInfrastructure();
+                return MongoDatabaseFactory(sp);
+            });
+            modelBuilder.Entity<User>().Property(u => u.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<Shop>().Property(s => s.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<RefreshToken>().Property(rt => rt.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<AuditLog>().Property(a => a.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<Customer>().Property(c => c.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<WalletAccount>().Property(w => w.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<CashLedgerEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<WalletLedgerEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<CashAdjustment>().Property(a => a.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<FloatAdjustment>().Property(a => a.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<Transaction>().Property(t => t.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<TransactionCancellation>().Property(c => c.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<TransactionReversal>().Property(r => r.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<CommissionEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<IdempotencyKey>().Property(k => k.Id).HasValueGenerator((_, _) => generator);
+        }
 
         base.OnModelCreating(modelBuilder);
     }

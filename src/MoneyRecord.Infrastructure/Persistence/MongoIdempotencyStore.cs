@@ -41,7 +41,7 @@ public sealed class MongoIdempotencyStore : IIdempotencyStore
     }
 
     private IMongoCollection<IdempotencyKeyDoc> Collection =>
-        _database.GetCollection<IdempotencyKeyDoc>("idempotencyKeys");
+        _database.GetCollection<IdempotencyKeyDoc>("idempotencyLeases");
 
     public async Task<IIdempotencyLease> BeginLeaseAsync(Guid key, string requestHash,
         CancellationToken ct)

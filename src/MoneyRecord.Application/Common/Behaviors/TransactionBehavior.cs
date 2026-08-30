@@ -46,10 +46,14 @@ public sealed class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior
                 }
 
                 var result = await next();
-                await _db.SaveChangesAsync(cancellationToken);
 
+                // For MongoDB, the handler typically calls SaveChangesAsync itself.
+                // Only call it here when a relational transaction is active.
                 if (tx is not null)
+                {
+                    await _db.SaveChangesAsync(cancellationToken);
                     await tx.CommitAsync(cancellationToken);
+                }
 
                 return result!;
             }

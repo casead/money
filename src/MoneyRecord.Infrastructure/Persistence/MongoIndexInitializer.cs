@@ -82,11 +82,11 @@ public static class MongoIndexInitializer
                 Builders<WalletLedgerEntry>.IndexKeys.Ascending(e => e.CreatedAtUtc)),
             new CreateIndexOptions { Name = "IX_WalletLedger_AccountId_CreatedAt" }));
 
-        // IdempotencyKeys indexes
-        var idempotencyKeys = database.GetCollection<IdempotencyKey>("idempotencyKeys");
-        await idempotencyKeys.Indexes.CreateOneAsync(new CreateIndexModel<IdempotencyKey>(
-            Builders<IdempotencyKey>.IndexKeys.Ascending(k => k.ExpiresAtUtc),
-            new CreateIndexOptions { Name = "IX_IdempotencyKeys_ExpiresAt" }));
+        // IdempotencyLeases indexes (used by MongoIdempotencyStore)
+        var idempotencyLeases = database.GetCollection<MongoIdempotencyStore.IdempotencyKeyDoc>("idempotencyLeases");
+        await idempotencyLeases.Indexes.CreateOneAsync(new CreateIndexModel<MongoIdempotencyStore.IdempotencyKeyDoc>(
+            Builders<MongoIdempotencyStore.IdempotencyKeyDoc>.IndexKeys.Ascending(k => k.ExpiresAtUtc),
+            new CreateIndexOptions { Name = "IX_IdempotencyLeases_ExpiresAt" }));
 
         // RefreshTokens indexes
         var refreshTokens = database.GetCollection<RefreshToken>("refreshTokens");
@@ -134,11 +134,8 @@ public static class MongoIndexInitializer
             Builders<Permission>.IndexKeys.Ascending(p => p.Code),
             new CreateIndexOptions { Unique = true, Name = "UQ_Permissions_Code" }));
 
-        // Counters collection (for TxnNumberGenerator)
+        // Counters collection (for TxnNumberGenerator) — _id is already unique in MongoDB
         var counters = database.GetCollection<MongoTxnNumberGenerator.CounterDocument>("counters");
-        await counters.Indexes.CreateOneAsync(new CreateIndexModel<MongoTxnNumberGenerator.CounterDocument>(
-            Builders<MongoTxnNumberGenerator.CounterDocument>.IndexKeys.Ascending(c => c.Id),
-            new CreateIndexOptions { Unique = true, Name = "UQ_Counters_Id" }));
 
         Console.WriteLine("[MongoDB] Indexes created successfully.");
     }

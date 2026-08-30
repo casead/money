@@ -28,6 +28,9 @@ public static class DependencyInjection
         services.AddSingleton<IMongoClient>(mongoClient);
         services.AddSingleton(sp => mongoClient.GetDatabase(databaseName));
 
+        // Set static factory for value generators in DbContext
+        MoneyRecordDbContext.MongoDatabaseFactory = sp => sp.GetRequiredService<IMongoDatabase>();
+
         services.AddDbContext<MoneyRecordDbContext>(options =>
             options.UseMongoDB(connectionString, databaseName));
 
