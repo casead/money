@@ -2,6 +2,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MoneyRecord.Domain.Entities;
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace MoneyRecord.Infrastructure.Persistence.Seeding;
 
@@ -126,6 +128,50 @@ public static class ReferenceDataSeeder
                 new AppSetting(10, "feePercentCashOut", "0", "percent", false, clock));
             await db.SaveChangesAsync();
             logger.LogInformation("Seeded 10 app settings.");
+        }
+
+        // 9. Initialize MongoDB counters for value generators.
+        //    Counter keys must match what MongoValueGenerator produces:
+        //    $"{entityType.ShortName()}_id" e.g. "AppSetting_id", "WalletProvider_id".
+        if (MoneyRecordDbContext.MongoDatabaseInstance is { } mongo)
+        {
+            var counters = mongo.GetCollection<BsonDocument>("counters");
+            var counterSeeds = new (string Name, long Value)[]
+            {
+                ("User_id", 0),
+                ("Shop_id", 0),
+                ("Role_id", 100),
+                ("Permission_id", 100),
+                ("WalletProvider_id", 100),
+                ("WalletAccount_id", 0),
+                ("Customer_id", 0),
+                ("AppSetting_id", 100),
+                ("CashLedgerEntry_id", 0),
+                ("WalletLedgerEntry_id", 0),
+                ("CashAdjustment_id", 0),
+                ("FloatAdjustment_id", 0),
+                ("Transaction_id", 0),
+                ("TransactionCancellation_id", 0),
+                ("TransactionReversal_id", 0),
+                ("CommissionEntry_id", 0),
+                ("IdempotencyKey_id", 0),
+                ("RefreshToken_id", 0),
+                ("AuditLog_id", 0),
+            };
+            foreach (var (name, value) in counterSeeds)
+            {
+                var filter = Builders<BsonDocument>.Filter.Eq("_id", name);
+                var existing = await counters.Find(filter).FirstOrDefaultAsync();
+                var currentSeq = existing != null && existing.Contains("seq")
+                    ? existing["seq"].ToInt64() : -1;
+                if (currentSeq < value)
+                {
+                    var doc = new BsonDocument { { "_id", name }, { "seq", value } };
+                    await counters.ReplaceOneAsync(filter, doc,
+                        new ReplaceOptions { IsUpsert = true });
+                }
+            }
+            logger.LogInformation("Initialized {Count} MongoDB counters.", counterSeeds.Length);
         }
 
         // 9. PhysicalCashAccount (single global pool)
