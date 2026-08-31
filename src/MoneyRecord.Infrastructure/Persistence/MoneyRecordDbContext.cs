@@ -101,11 +101,13 @@ public class MoneyRecordDbContext : DbContext
         if (MongoDatabaseInstance is not null)
         {
             var generator = new MongoValueGenerator(MongoDatabaseInstance);
+            var intGenerator = new MongoIntValueGenerator(MongoDatabaseInstance);
             modelBuilder.Entity<User>().Property(u => u.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<Shop>().Property(s => s.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<RefreshToken>().Property(rt => rt.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<AuditLog>().Property(a => a.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<Customer>().Property(c => c.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<WalletProvider>().Property(wp => wp.Id).HasValueGenerator((_, _) => intGenerator);
             modelBuilder.Entity<WalletAccount>().Property(w => w.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<CashLedgerEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<WalletLedgerEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);

@@ -131,13 +131,13 @@ public sealed class UpdateProviderCommandHandler
     internal static async Task<ProviderResponse> ProjectAsync(
         IMoneyRecordDbContext db, WalletProvider p, CancellationToken ct)
     {
-        var stats = await db.WalletAccounts.IgnoreQueryFilters()
+        var accounts = await db.WalletAccounts.IgnoreQueryFilters()
             .Where(a => a.WalletProviderId == p.Id && !a.IsDeleted)
-            .GroupBy(a => 1)
-            .Select(g => new { Count = g.Count(), Float = g.Sum(a => a.CurrentFloatBalance) })
-            .FirstOrDefaultAsync(ct);
+            .ToListAsync(ct);
+        var count = accounts.Count;
+        var totalFloat = accounts.Sum(a => a.CurrentFloatBalance);
         return new ProviderResponse(p.Id, p.Code, p.Name, p.LogoUrl,
-            p.DisplayOrder, p.IsActive, stats?.Count ?? 0, stats?.Float ?? 0);
+            p.DisplayOrder, p.IsActive, count, totalFloat);
     }
 }
 
