@@ -44,6 +44,14 @@ public class ShopsController : ControllerBase
         return result.IsSuccess ? Ok(Envelope(result.Value)) : Error(result);
     }
 
+    /// <summary>Shop detail: users + transaction counts (day/week/month).</summary>
+    [HttpGet("{id:long}/detail")]
+    public async Task<IActionResult> GetDetail(long id, CancellationToken ct)
+    {
+        var result = await _sender.Send(new GetShopDetailQuery(id), ct);
+        return result.IsSuccess ? Ok(Envelope(result.Value)) : Error(result);
+    }
+
     /// <summary>TEN-001 — create shop (unique Code).</summary>
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateShopRequest body, CancellationToken ct)
