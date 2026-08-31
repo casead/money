@@ -111,20 +111,34 @@ public sealed class ListUsersQueryHandler : IRequestHandler<ListUsersQuery, Resu
             (_, true) => query.OrderByDescending(u => u.CreatedAtUtc)
         };
 
-        var items = await ordered
+        var users = await ordered
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(u => new UserListItem(
-                u.Id,
-                u.Username,
-                u.FullName,
-                u.Phone,
-                u.Role.Code,
-                u.IsActive,
-                u.LastLoginAtUtc,
-                u.ShopId,
-                u.Shop != null ? u.Shop.Name : null))
             .ToListAsync(ct);
+
+        var roleIds = users.Select(u => u.RoleId).Distinct().ToList();
+        var roles = await _db.Roles.Where(r => roleIds.Contains(r.Id))
+            .Select(r => new { r.Id, r.Code })
+            .ToDictionaryAsync(r => r.Id, r => r.Code, ct);
+
+        var shopIds = users.Where(u => u.ShopId.HasValue).Select(u => u.ShopId!.Value).Distinct().ToList();
+        var shops = shopIds.Count > 0
+            ? await _db.Shops.Where(s => shopIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Name })
+                .ToDictionaryAsync(s => s.Id, s => s.Name, ct)
+            : new Dictionary<long, string>();
+
+        var items = users.Select(u => new UserListItem(
+            u.Id,
+            u.Username,
+            u.FullName,
+            u.Phone,
+            roles.TryGetValue(u.RoleId, out var rc) ? rc : "Staff",
+            u.IsActive,
+            u.LastLoginAtUtc,
+            u.ShopId,
+            u.ShopId.HasValue && shops.TryGetValue(u.ShopId.Value, out var sn) ? sn : null))
+            .ToList();
 
         return Result<PagedResult<UserListItem>>.Success(
             PagedResult<UserListItem>.Create(items, totalItems, page, pageSize));
