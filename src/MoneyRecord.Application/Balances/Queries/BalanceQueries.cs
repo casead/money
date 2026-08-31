@@ -113,7 +113,8 @@ public sealed record WalletBalanceItem(
     string AccountMasked,
     string AccountName,
     long Balance,
-    string? IntegrityFlag);
+    string? IntegrityFlag,
+    string? ProviderLogoUrl);
 
 public sealed record WalletBalancesResponse(
     IReadOnlyList<WalletBalanceItem> Accounts,
@@ -142,7 +143,7 @@ public sealed class GetWalletBalancesQueryHandler
         var providerIds = accounts.Select(a => a.WalletProviderId).Distinct().ToList();
         var providers = await _db.WalletProviders.AsNoTracking()
             .Where(p => providerIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, p => p.Code, ct);
+            .ToDictionaryAsync(p => p.Id, p => (p.Code, p.LogoUrl), ct);
 
         var orderedAccounts = accounts
             .OrderBy(a => providers.TryGetValue(a.WalletProviderId, out var _) ? 0 : 1)
@@ -169,14 +170,15 @@ public sealed class GetWalletBalancesQueryHandler
         var items = new List<WalletBalanceItem>(orderedAccounts.Count);
         foreach (var a in orderedAccounts)
         {
-            var providerCode = providers.TryGetValue(a.WalletProviderId, out var pc) ? pc : "???";
+            var providerCode = providers.TryGetValue(a.WalletProviderId, out var pc) ? pc.Code : "???";
+            var providerLogo = providers.TryGetValue(a.WalletProviderId, out var pl) ? pl.LogoUrl : null;
             var (inc, dec) = ledgerMap.TryGetValue(a.Id, out var v) ? v : (0L, 0L);
             var ledgerSum = IntegrityCheck.SignedSum(inc, dec);
             var flag = IntegrityCheck.Flag(a.CurrentFloatBalance, ledgerSum);
             items.Add(new WalletBalanceItem(
                 a.Id, providerCode,
                 CreateWalletAccountCommandHandler.Mask(a.AccountNumber),
-                a.AccountName, a.CurrentFloatBalance, flag));
+                a.AccountName, a.CurrentFloatBalance, flag, providerLogo));
         }
 
         return Result<WalletBalancesResponse>.Success(new WalletBalancesResponse(
