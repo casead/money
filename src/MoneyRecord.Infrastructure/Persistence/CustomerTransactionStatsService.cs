@@ -17,27 +17,29 @@ public sealed class CustomerTransactionStatsService : ICustomerTransactionStats
 
     public async Task<CustomerLifetimeStats> GetAsync(long customerId, CancellationToken ct)
     {
+        // Load into memory for MongoDB compatibility (GroupBy on enum not translatable).
         var rows = await _db.Transactions.AsNoTracking()
             .Where(t => t.CustomerId == customerId
                         && t.Status == TransactionStatus.Completed)
-            .GroupBy(t => t.Type)
+            .ToListAsync(ct);
+
+        var grouped = rows.GroupBy(t => t.Type)
             .Select(g => new
             {
                 Type = g.Key,
                 Count = g.Count(),
                 Total = g.Sum(t => t.Amount),
                 Last = g.Max(t => t.OccurredAtUtc)
-            })
-            .ToListAsync(ct);
+            }).ToList();
 
-        var cashIn = rows.FirstOrDefault(r => r.Type == TransactionType.CashIn);
-        var cashOut = rows.FirstOrDefault(r => r.Type == TransactionType.CashOut);
+        var cashIn = grouped.FirstOrDefault(r => r.Type == TransactionType.CashIn);
+        var cashOut = grouped.FirstOrDefault(r => r.Type == TransactionType.CashOut);
 
         return new CustomerLifetimeStats(
             cashIn?.Total ?? 0,
             cashOut?.Total ?? 0,
             cashIn?.Count ?? 0,
             cashOut?.Count ?? 0,
-            rows.Count == 0 ? null : rows.Max(r => r.Last));
+            grouped.Count == 0 ? null : grouped.Max(r => r.Last));
     }
 }

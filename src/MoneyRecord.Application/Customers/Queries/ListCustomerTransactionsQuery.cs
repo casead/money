@@ -77,21 +77,30 @@ public sealed class ListCustomerTransactionsQueryHandler
 
         var totalItems = await query.CountAsync(ct);
 
-        var items = await query
+        var txns = await query
             .OrderByDescending(t => t.OccurredAtUtc)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(t => new CustomerTransactionItem(
+            .ToListAsync(ct);
+
+        var providerIds = txns.Select(t => t.WalletProviderId).Distinct().ToList();
+        var providers = providerIds.Count > 0
+            ? await _db.WalletProviders.AsNoTracking()
+                .Where(p => providerIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.Code, ct)
+            : new Dictionary<int, string>();
+
+        var items = txns.Select(t => new CustomerTransactionItem(
                 t.Id,
                 t.TxnNo,
                 (int)t.Type,
-                t.Type == TransactionType.CashIn ? "CashIn" : "CashOut",
-                t.WalletProvider.Code,
+                t.Type.ToString(),
+                providers.TryGetValue(t.WalletProviderId, out var pc) ? pc : "???",
                 t.Amount,
                 (int)t.Status,
                 t.Status.ToString(),
                 t.OccurredAtUtc))
-            .ToListAsync(ct);
+            .ToList();
 
         return Result<PagedResult<CustomerTransactionItem>>.Success(
             PagedResult<CustomerTransactionItem>.Create(items, totalItems, page, pageSize));
