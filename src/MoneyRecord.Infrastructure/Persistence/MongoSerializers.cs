@@ -16,6 +16,7 @@ public static class MongoSerializers
     {
         if (_registered) return;
         BsonSerializer.RegisterSerializer(new DateOnlySerializer());
+        BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
         _registered = true;
     }
 }
