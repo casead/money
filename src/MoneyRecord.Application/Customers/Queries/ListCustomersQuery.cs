@@ -115,14 +115,20 @@ public sealed class ListCustomersQueryHandler
                 var from = request.DateFrom.Value;
                 var to = request.DateTo.Value;
                 var shopId = _currentUser.ShopId;
-                // Subquery: bookmarked customer IDs with at least one transaction in the range.
-                var bookmarkedTxnCustomerIds = _db.Transactions.AsNoTracking()
+
+                // Materialize bookmarked customer IDs from transactions first
+                // (cross-collection subqueries not supported by MongoDB EF Core).
+                var fromD = DateOnly.FromDateTime(from);
+                var toD = DateOnly.FromDateTime(to);
+                var bookmarkedTxnCustomerIds = await _db.Transactions.AsNoTracking()
                     .Where(t => t.ShopId == shopId
-                                && t.BusinessDate >= DateOnly.FromDateTime(from)
-                                && t.BusinessDate <= DateOnly.FromDateTime(to)
+                                && t.BusinessDate >= fromD
+                                && t.BusinessDate <= toD
                                 && t.CustomerId != null)
                     .Select(t => t.CustomerId!.Value)
-                    .Distinct();
+                    .Distinct()
+                    .ToListAsync(ct);
+
                 query = query.Where(c =>
                     (c.CreatedAtUtc >= from && c.CreatedAtUtc <= to)
                     || (c.IsBookmarked && bookmarkedTxnCustomerIds.Contains(c.Id)));
