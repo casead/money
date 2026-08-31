@@ -18,15 +18,27 @@ public sealed class GetCashLedgerQueryHandler
     : IRequestHandler<GetCashLedgerQuery, Result<PagedResult<LedgerEntryItem>>>
 {
     private readonly IMoneyRecordDbContext _db;
+    private readonly ICurrentUser _currentUser;
 
-    public GetCashLedgerQueryHandler(IMoneyRecordDbContext db) => _db = db;
+    public GetCashLedgerQueryHandler(IMoneyRecordDbContext db, ICurrentUser currentUser)
+    {
+        _db = db;
+        _currentUser = currentUser;
+    }
 
     public async Task<Result<PagedResult<LedgerEntryItem>>> Handle(
         GetCashLedgerQuery request, CancellationToken ct)
     {
         var (page, pageSize) = LedgerPaging.Normalize(request.Page, request.PageSize);
 
-        var query = _db.CashLedgerEntries.AsNoTracking();
+        // Tenant scope (M11): only entries created by users of the same shop.
+        var shopUserIds = await _db.Users.AsNoTracking()
+            .Where(u => u.ShopId == _currentUser.ShopId)
+            .Select(u => u.Id)
+            .ToListAsync(ct);
+
+        var query = _db.CashLedgerEntries.AsNoTracking()
+            .Where(e => shopUserIds.Contains(e.CreatedByUserId));
         if (request.DateFrom is { } from)
             query = query.Where(e => e.CreatedAtUtc >= from);
         if (request.DateTo is { } to)
@@ -87,8 +99,13 @@ public sealed class GetAccountBalanceQueryHandler
     : IRequestHandler<GetAccountBalanceQuery, Result<AccountBalanceResponse>>
 {
     private readonly IMoneyRecordDbContext _db;
+    private readonly ICurrentUser _currentUser;
 
-    public GetAccountBalanceQueryHandler(IMoneyRecordDbContext db) => _db = db;
+    public GetAccountBalanceQueryHandler(IMoneyRecordDbContext db, ICurrentUser currentUser)
+    {
+        _db = db;
+        _currentUser = currentUser;
+    }
 
     public async Task<Result<AccountBalanceResponse>> Handle(GetAccountBalanceQuery request,
         CancellationToken ct)
@@ -98,6 +115,11 @@ public sealed class GetAccountBalanceQueryHandler
         if (account is null)
             return Result<AccountBalanceResponse>.Failure(
                 ErrorCodes.NotFound, "WalletAccount ရှာမတွေ့ပါ။");
+
+        // Tenant guard (M11) — cannot view another shop's balance.
+        if (account.ShopId != _currentUser.ShopId)
+            return Result<AccountBalanceResponse>.Failure(
+                ErrorCodes.Forbidden, "ဤ account ၏ balance ကို ကြည့်ခွင့် မရှိပါ။");
 
         var lastEntry = await _db.WalletLedgerEntries.AsNoTracking()
             .Where(e => e.WalletAccountId == account.Id)

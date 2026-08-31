@@ -137,6 +137,11 @@ public sealed class AdjustBalanceCommandHandler
             _db.PhysicalCashAccounts.Add(cash);
         }
 
+        // Tenant guard (M11) — cannot adjust another shop's cash.
+        if (cash.Id != _currentUser.ShopId)
+            return Result<AdjustmentResponse>.Failure(ErrorCodes.Forbidden,
+                "အခြားဆိုင်၏ cash balance ကို ချိန်ညှိခွင့် မရှိပါ။");
+
         var eff = ResolveEffective(request.CountedValue, direction, request.Amount,
             locked.Balance);
         if (!eff.IsSuccess)

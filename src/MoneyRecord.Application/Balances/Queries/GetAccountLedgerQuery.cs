@@ -44,15 +44,27 @@ public sealed class GetAccountLedgerQueryHandler
     : IRequestHandler<GetAccountLedgerQuery, Result<PagedResult<LedgerEntryItem>>>
 {
     private readonly IMoneyRecordDbContext _db;
+    private readonly ICurrentUser _currentUser;
 
-    public GetAccountLedgerQueryHandler(IMoneyRecordDbContext db) => _db = db;
+    public GetAccountLedgerQueryHandler(IMoneyRecordDbContext db, ICurrentUser currentUser)
+    {
+        _db = db;
+        _currentUser = currentUser;
+    }
 
     public async Task<Result<PagedResult<LedgerEntryItem>>> Handle(
         GetAccountLedgerQuery request, CancellationToken ct)
     {
-        if (!await _db.WalletAccounts.AnyAsync(a => a.Id == request.AccountId, ct))
+        var account = await _db.WalletAccounts.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Id == request.AccountId, ct);
+        if (account is null)
             return Result<PagedResult<LedgerEntryItem>>.Failure(
                 ErrorCodes.NotFound, "WalletAccount ရှာမတွေ့ပါ။");
+
+        // Tenant guard (M11) — cannot view another shop's ledger.
+        if (account.ShopId != _currentUser.ShopId)
+            return Result<PagedResult<LedgerEntryItem>>.Failure(
+                ErrorCodes.Forbidden, "ဤ account ၏ ledger ကို ကြည့်ခွင့် မရှိပါ။");
 
         var (page, pageSize) = LedgerPaging.Normalize(request.Page, request.PageSize);
 
