@@ -242,6 +242,9 @@ public abstract class CreateTxnHandlerBase<TCommand>
         var receipt = BuildReceipt(txn, lockedCash.CurrentCashBalance,
             lockedWallet.CurrentFloatBalance, duplicateWarning, isAdmin, isReplay: false);
 
+        // Persist balance updates + ledger entries (MongoDB has no wrapping transaction).
+        await _db.SaveChangesAsync(ct);
+
         await _idempotency.CompleteAsync(
             request.IdempotencyKey, JsonSerializer.Serialize(receipt), ct);
 
@@ -308,9 +311,8 @@ public abstract class CreateTxnHandlerBase<TCommand>
     {
         var locked = await _locker.LockWalletAccountAsync(accountId, ct);
 
-        // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
-        await _db.ClearTrackedEntitiesAsync(ct);
-
+        // Locker uses AsNoTracking, so no double-tracking. Do NOT clear here
+        // because it would detach the cash entity tracked by LockAndTrackCashAsync.
         var tracked = await _db.WalletAccounts.FirstAsync(a => a.Id == accountId, ct);
         return tracked;
     }
@@ -319,9 +321,8 @@ public abstract class CreateTxnHandlerBase<TCommand>
     {
         var locked = await _locker.LockPhysicalCashAsync(ct);
 
-        // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
-        await _db.ClearTrackedEntitiesAsync(ct);
-
+        // Locker uses AsNoTracking, so no double-tracking. Do NOT clear here
+        // because LockAndTrackWalletAsync would detach the cash entity.
         var tracked = await _db.PhysicalCashAccounts
             .FirstOrDefaultAsync(c => c.Id == locked.Id, ct);
         if (tracked is null)
