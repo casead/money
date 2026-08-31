@@ -88,8 +88,8 @@ public sealed class CancelTransactionCommandHandler
 
         // ---- EC-03: UPDLOCK the txn row → fresh read under lock → terminal guard ----
         var lockedId = await LockTransactionRowAsync(txn.Id, ct);
+        await _db.ClearTrackedEntitiesAsync(ct);
         var current = await _db.Transactions.FirstAsync(t => t.Id == lockedId, ct);
-        await _db.ReloadAsync(current, ct);
         if (!current.IsCompleted)
             throw new ConflictStateException(
                 $"TXN {current.TxnNo} သည် terminal state ({current.Status}) ဖြစ်နေပြီး ပြောင်းလို့မရပါ။");
@@ -111,17 +111,16 @@ public sealed class CancelTransactionCommandHandler
         lockCash = await _locker.LockPhysicalCashAsync(ct);
         lockWallet = await _locker.LockWalletAccountAsync(current.WalletAccountId, ct);
 
+        await _db.ClearTrackedEntitiesAsync(ct);
         var trackedWallet = await _db.WalletAccounts
             .FirstAsync(a => a.Id == current.WalletAccountId, ct);
-        await _db.ReloadAsync(trackedWallet, ct);
         var trackedCash = await _db.PhysicalCashAccounts
-            .FirstOrDefaultAsync(c => c.Id == lockCash.Id, ct); // per-shop cash pool (M11)
+            .FirstOrDefaultAsync(c => c.Id == lockCash.Id, ct);
         if (trackedCash is null)
         {
             trackedCash = Domain.Entities.PhysicalCashAccount.CreateForShop(lockCash.Id, 0, _clock);
-            _db.PhysicalCashAccounts.Add(trackedCash); // legacy-shop self-heal
+            _db.PhysicalCashAccounts.Add(trackedCash);
         }
-        await _db.ReloadAsync(trackedCash, ct);
 
         // ---- Sufficiency guards: the decreasing side must cover amount (+fee when
         //      the fee also rides on that same side) ----
@@ -297,8 +296,8 @@ public sealed class ReverseTransactionCommandHandler
         // ---- EC-03: lock txn row → fresh read → terminal guard. This also blocks
         //      reversal-of-reversal (BR-027): REVERSED/CANCELLED are terminal. ----
         var lockedId = await LockTransactionRowAsync(original.Id, ct);
+        await _db.ClearTrackedEntitiesAsync(ct);
         var current = await _db.Transactions.FirstAsync(t => t.Id == lockedId, ct);
-        await _db.ReloadAsync(current, ct);
         if (!current.IsCompleted)
             throw new ConflictStateException(
                 $"TXN {current.TxnNo} သည် terminal state ({current.Status}) ဖြစ်နေပြီး ပြောင်းလို့မရပါ။");
@@ -317,17 +316,16 @@ public sealed class ReverseTransactionCommandHandler
         lockCash = await _locker.LockPhysicalCashAsync(ct);
         lockWallet = await _locker.LockWalletAccountAsync(current.WalletAccountId, ct);
 
+        await _db.ClearTrackedEntitiesAsync(ct);
         var trackedWallet = await _db.WalletAccounts
             .FirstAsync(a => a.Id == current.WalletAccountId, ct);
-        await _db.ReloadAsync(trackedWallet, ct);
         var trackedCash = await _db.PhysicalCashAccounts
-            .FirstOrDefaultAsync(c => c.Id == lockCash.Id, ct); // per-shop cash pool (M11)
+            .FirstOrDefaultAsync(c => c.Id == lockCash.Id, ct);
         if (trackedCash is null)
         {
             trackedCash = Domain.Entities.PhysicalCashAccount.CreateForShop(lockCash.Id, 0, _clock);
-            _db.PhysicalCashAccounts.Add(trackedCash); // legacy-shop self-heal
+            _db.PhysicalCashAccounts.Add(trackedCash);
         }
-        await _db.ReloadAsync(trackedCash, ct);
 
         // ---- Sufficiency: mirror undoes the original's movement —
         //      orig=In → mirror Out moves cash ↓ (guard cash; +fee when the original

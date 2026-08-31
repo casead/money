@@ -30,7 +30,7 @@ public sealed class MongoBalanceLocker : IBalanceLocker
         var shopId = (int)(_currentUser.ShopId
             ?? throw new InvalidOperationException("Shop context မရှိပါ။"));
 
-        var cash = await _db.PhysicalCashAccounts
+        var cash = await _db.PhysicalCashAccounts.AsNoTracking()
             .FirstOrDefaultAsync(c => c.Id == shopId, ct);
 
         if (cash is null)
@@ -45,7 +45,7 @@ public sealed class MongoBalanceLocker : IBalanceLocker
 
     public async Task<LockedWalletBalance> LockWalletAccountAsync(long walletAccountId, CancellationToken ct)
     {
-        var account = await _db.WalletAccounts
+        var account = await _db.WalletAccounts.AsNoTracking()
             .FirstOrDefaultAsync(a => a.Id == walletAccountId && !a.IsDeleted, ct);
 
         if (account is null)
@@ -57,7 +57,7 @@ public sealed class MongoBalanceLocker : IBalanceLocker
 
     public async Task<long> LockTransactionRowAsync(long transactionId, CancellationToken ct)
     {
-        var txn = await _db.Transactions
+        var txn = await _db.Transactions.AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
 
         if (txn is null)

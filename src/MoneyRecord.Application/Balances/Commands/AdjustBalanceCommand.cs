@@ -125,15 +125,17 @@ public sealed class AdjustBalanceCommandHandler
         AdjustBalanceCommand request, LedgerDirection direction, long actorId, CancellationToken ct)
     {
         var locked = await _locker.LockPhysicalCashAsync(ct);
+
+        // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
+        await _db.ClearTrackedEntitiesAsync(ct);
+
         var cash = await _db.PhysicalCashAccounts
-            .FirstOrDefaultAsync(c => c.Id == locked.Id, ct); // per-shop cash pool (M11)
+            .FirstOrDefaultAsync(c => c.Id == locked.Id, ct);
         if (cash is null)
         {
-            // Legacy shop without a seeded pool — self-heal on first adjustment.
             cash = Domain.Entities.PhysicalCashAccount.CreateForShop(locked.Id, 0, _clock);
             _db.PhysicalCashAccounts.Add(cash);
         }
-        await _db.ReloadAsync(cash, ct); // fresh under lock
 
         var eff = ResolveEffective(request.CountedValue, direction, request.Amount,
             locked.Balance);
@@ -168,8 +170,11 @@ public sealed class AdjustBalanceCommandHandler
         long actorId, CancellationToken ct)
     {
         var locked = await _locker.LockWalletAccountAsync(accountId, ct);
+
+        // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
+        await _db.ClearTrackedEntitiesAsync(ct);
+
         var account = await _db.WalletAccounts.FirstAsync(a => a.Id == accountId, ct);
-        await _db.ReloadAsync(account, ct); // fresh under lock
 
         // Tenant guard (M11) — cannot adjust another shop's float.
         if (account.ShopId != _currentUser.ShopId)

@@ -308,9 +308,9 @@ public abstract class CreateTxnHandlerBase<TCommand>
     {
         var locked = await _locker.LockWalletAccountAsync(accountId, ct);
 
-        // Row is now exclusively locked — no other txn can modify it.
-        // Reload is unnecessary: the locked entity already holds the
-        // latest balance from the lock acquisition itself.
+        // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
+        await _db.ClearTrackedEntitiesAsync(ct);
+
         var tracked = await _db.WalletAccounts.FirstAsync(a => a.Id == accountId, ct);
         return tracked;
     }
@@ -318,12 +318,16 @@ public abstract class CreateTxnHandlerBase<TCommand>
     private async Task<PhysicalCashAccount> LockAndTrackCashAsync(CancellationToken ct)
     {
         var locked = await _locker.LockPhysicalCashAsync(ct);
+
+        // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
+        await _db.ClearTrackedEntitiesAsync(ct);
+
         var tracked = await _db.PhysicalCashAccounts
-            .FirstOrDefaultAsync(c => c.Id == locked.Id, ct); // per-shop cash pool (M11)
+            .FirstOrDefaultAsync(c => c.Id == locked.Id, ct);
         if (tracked is null)
         {
             tracked = PhysicalCashAccount.CreateForShop(locked.Id, 0, _clock);
-            _db.PhysicalCashAccounts.Add(tracked); // legacy-shop self-heal
+            _db.PhysicalCashAccounts.Add(tracked);
         }
         return tracked;
     }
