@@ -87,6 +87,13 @@ public class MoneyRecordDbContext : DbContext
         modelBuilder.Entity<TransactionTypeSeed>().ToCollection("transactionTypes");
         modelBuilder.Entity<TransactionStatusSeed>().ToCollection("transactionStatuses");
 
+        // DateOnly ↔ DateTime conversion for MongoDB (no native DateOnly support)
+        modelBuilder.Entity<Transaction>()
+            .Property(t => t.BusinessDate)
+            .HasConversion(
+                v => v.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                v => DateOnly.FromDateTime(v));
+
         // Seed data
         SeedRoles(modelBuilder);
         SeedPermissions(modelBuilder);

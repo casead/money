@@ -81,27 +81,32 @@ public sealed class GetDashboardQueryHandler
             ? []
             : await _db.WalletAccounts.AsNoTracking()
                 .Where(a => a.IsActive && !a.IsDeleted && a.ShopId == _currentUser.ShopId)
-                .OrderBy(a => a.WalletProvider.DisplayOrder).ThenBy(a => a.Id)
-                .Select(a => new
-                {
-                    a.Id,
-                    ProviderId = a.WalletProviderId,
-                    ProviderCode = a.WalletProvider.Code,
-                    a.CurrentFloatBalance
-                })
+                .OrderBy(a => a.Id)
                 .ToListAsync(ct);
 
-        // Day aggregates (netted: only COMPLETED rows) — direct aggregation.
+        var providerIds = accounts.Select(a => a.WalletProviderId).Distinct().ToList();
+        var providers = providerIds.Count > 0
+            ? await _db.WalletProviders.AsNoTracking()
+                .Where(p => providerIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.Code, ct)
+            : new Dictionary<int, string>();
+
+        var accountViews = accounts.Select(a => new
+        {
+            a.Id,
+            ProviderId = a.WalletProviderId,
+            ProviderCode = providers.TryGetValue(a.WalletProviderId, out var pc) ? pc : "???",
+            a.CurrentFloatBalance
+        }).ToList();
+
+        // Day aggregates (netted: only COMPLETED rows) — load into memory for MongoDB compat.
         var nettedDay = ReportNetting.Netted(_db, date, date, _currentUser.ShopId);
-        var cashInTotal = await nettedDay
-            .Where(t => t.Type == TransactionType.CashIn)
-            .SumAsync(t => t.Amount, ct);
-        var cashOutTotal = await nettedDay
-            .Where(t => t.Type == TransactionType.CashOut)
-            .SumAsync(t => t.Amount, ct);
-        var dayTxnCount = await nettedDay.CountAsync(ct);
+        var dayRows = await nettedDay.ToListAsync(ct);
+        var cashInTotal = dayRows.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount);
+        var cashOutTotal = dayRows.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount);
+        var dayTxnCount = dayRows.Count;
         var dayGross = showProfit
-            ? await nettedDay.SumAsync(t => t.FeeAmount - t.CommissionAmount, ct)
+            ? dayRows.Sum(t => t.FeeAmount - t.CommissionAmount)
             : (long?)null;
 
         // Low-balance warnings from settings thresholds (shop-scoped w/ global fallback)
@@ -114,14 +119,14 @@ public sealed class GetDashboardQueryHandler
         var cashBalance = cash?.CurrentCashBalance ?? 0;
         if (cash is not null && cash.CurrentCashBalance < cashThreshold)
             warnings.Add($"ရုံးငွေ လက်ကျန် {cash.CurrentCashBalance:N0} Ks သည် သတိပေးချက်အနိမ့် ({cashThreshold:N0} Ks) အောက် ရောက်နေပါသည်။");
-        foreach (var a in accounts.Where(a => a.CurrentFloatBalance < floatThreshold))
+        foreach (var a in accountViews.Where(a => a.CurrentFloatBalance < floatThreshold))
             warnings.Add($"{a.ProviderCode} float လက်ကျန် {a.CurrentFloatBalance:N0} Ks သည် သတိပေးချက်အနိမ့် ({floatThreshold:N0} Ks) အောက် ရောက်နေပါသည်။");
 
         return Result<DashboardResponse>.Success(new DashboardResponse(
             date,
             cashBalance,
-            accounts.Sum(a => a.CurrentFloatBalance),
-            accounts.Select(a => new DashboardProviderRow(
+            accountViews.Sum(a => a.CurrentFloatBalance),
+            accountViews.Select(a => new DashboardProviderRow(
                 a.ProviderId, a.ProviderCode, a.CurrentFloatBalance)).ToList(),
             cashInTotal,
             cashOutTotal,
@@ -186,31 +191,36 @@ public sealed class GetDailyReportQueryHandler
     {
         var date = request.Date ?? _clock.TodayYangon;
         var shopId = _currentUser.ShopId;
-        var netted = ReportNetting.Netted(_db, date, date, shopId);
 
-        // Totals — direct aggregation, no GroupBy.
-        var cashInTotal = await netted
-            .Where(t => t.Type == TransactionType.CashIn)
-            .SumAsync(t => t.Amount, ct);
-        var cashOutTotal = await netted
-            .Where(t => t.Type == TransactionType.CashOut)
-            .SumAsync(t => t.Amount, ct);
-        var fees = await netted.SumAsync(t => t.FeeAmount, ct);
-        var commissions = await netted.SumAsync(t => t.CommissionAmount, ct);
-        var txnCount = await netted.CountAsync(ct);
-
-        var cancellations = await _db.Transactions.AsNoTracking()
-            .CountAsync(t => t.ShopId == shopId
-                             && t.BusinessDate == date
-                             && t.Status == TransactionStatus.Cancelled, ct);
-
-        // Per-provider breakdown — load lightweight rows, group in memory.
-        var providerRows = await netted
-            .Select(t => new { t.Type, t.Amount, t.FeeAmount, t.CommissionAmount,
-                Code = t.WalletProvider.Code })
+        // Load ALL transactions for the date+shop into memory (MongoDB compat).
+        var allTxns = await _db.Transactions.AsNoTracking()
+            .Where(t => t.ShopId == shopId && t.BusinessDate == date)
             .ToListAsync(ct);
 
-        var byProvider = providerRows
+        var allRows = allTxns.Where(t => t.Status == TransactionStatus.Completed).ToList();
+
+        var cashInTotal = allRows.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount);
+        var cashOutTotal = allRows.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount);
+        var fees = allRows.Sum(t => t.FeeAmount);
+        var commissions = allRows.Sum(t => t.CommissionAmount);
+        var txnCount = allRows.Count;
+
+        var cancellations = allTxns.Count(t => t.Status == TransactionStatus.Cancelled);
+
+        var providerIds = allRows.Select(t => t.WalletProviderId).Distinct().ToList();
+        var providers = providerIds.Count > 0
+            ? await _db.WalletProviders.AsNoTracking()
+                .Where(p => providerIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.Code, ct)
+            : new Dictionary<int, string>();
+
+        var rowsWithCode = allRows.Select(t => new
+        {
+            t.Type, t.Amount, t.FeeAmount, t.CommissionAmount,
+            Code = providers.TryGetValue(t.WalletProviderId, out var pc) ? pc : "???"
+        }).ToList();
+
+        var byProvider = rowsWithCode
             .GroupBy(r => r.Code)
             .Select(g => new DailyReportProviderRow(
                 g.Key,
@@ -288,31 +298,37 @@ public sealed class GetMonthlyReportQueryHandler
         var from = new DateOnly(year, month, 1);
         var to = from.AddMonths(1).AddDays(-1);
         var shopId = _currentUser.ShopId;
-        var netted = ReportNetting.Netted(_db, from, to, shopId);
 
-        // Totals — direct aggregation.
-        var cashInTotal = await netted
-            .Where(t => t.Type == TransactionType.CashIn)
-            .SumAsync(t => t.Amount, ct);
-        var cashOutTotal = await netted
-            .Where(t => t.Type == TransactionType.CashOut)
-            .SumAsync(t => t.Amount, ct);
-        var fees = await netted.SumAsync(t => t.FeeAmount, ct);
-        var commissions = await netted.SumAsync(t => t.CommissionAmount, ct);
-        var txnCount = await netted.CountAsync(ct);
-
-        var cancellations = await _db.Transactions.AsNoTracking()
-            .CountAsync(t => t.ShopId == shopId
-                             && t.BusinessDate >= from && t.BusinessDate <= to
-                             && t.Status == TransactionStatus.Cancelled, ct);
-
-        // Per-provider breakdown — load rows, group in memory.
-        var providerRows = await netted
-            .Select(t => new { t.Type, t.Amount, t.FeeAmount, t.CommissionAmount,
-                Code = t.WalletProvider.Code })
+        // Load ALL transactions for the month+shop into memory (MongoDB compat).
+        var allTxns = await _db.Transactions.AsNoTracking()
+            .Where(t => t.ShopId == shopId
+                        && t.BusinessDate >= from && t.BusinessDate <= to)
             .ToListAsync(ct);
 
-        var byProvider = providerRows
+        var allRows = allTxns.Where(t => t.Status == TransactionStatus.Completed).ToList();
+
+        var cashInTotal = allRows.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount);
+        var cashOutTotal = allRows.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount);
+        var fees = allRows.Sum(t => t.FeeAmount);
+        var commissions = allRows.Sum(t => t.CommissionAmount);
+        var txnCount = allRows.Count;
+
+        var cancellations = allTxns.Count(t => t.Status == TransactionStatus.Cancelled);
+
+        var providerIds = allRows.Select(t => t.WalletProviderId).Distinct().ToList();
+        var providers = providerIds.Count > 0
+            ? await _db.WalletProviders.AsNoTracking()
+                .Where(p => providerIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.Code, ct)
+            : new Dictionary<int, string>();
+
+        var monthlyRowsWithCode = allRows.Select(t => new
+        {
+            t.Type, t.Amount, t.FeeAmount, t.CommissionAmount,
+            Code = providers.TryGetValue(t.WalletProviderId, out var pc) ? pc : "???"
+        }).ToList();
+
+        var byProvider = monthlyRowsWithCode
             .GroupBy(r => r.Code)
             .Select(g => new DailyReportProviderRow(
                 g.Key,
@@ -392,11 +408,21 @@ public sealed class GetProfitReportQueryHandler
         var shopId = _currentUser.ShopId;
         var netted = ReportNetting.Netted(_db, from, to, shopId);
 
-        // Load lightweight rows, aggregate in memory (EF Core can't translate complex GroupBy).
-        var rows = await netted
-            .Select(t => new { t.Type, t.BusinessDate, t.FeeAmount, t.CommissionAmount,
-                Code = t.WalletProvider.Code })
-            .ToListAsync(ct);
+        // Load full entities into memory for MongoDB compatibility.
+        var allTxns = await netted.ToListAsync(ct);
+
+        var providerIds = allTxns.Select(t => t.WalletProviderId).Distinct().ToList();
+        var providers = providerIds.Count > 0
+            ? await _db.WalletProviders.AsNoTracking()
+                .Where(p => providerIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.Code, ct)
+            : new Dictionary<int, string>();
+
+        var rows = allTxns.Select(t => new
+        {
+            t.Type, t.BusinessDate, t.FeeAmount, t.CommissionAmount,
+            Code = providers.TryGetValue(t.WalletProviderId, out var pc) ? pc : "???"
+        }).ToList();
 
         List<ProfitReportRow> series;
         switch (request.Dimension)

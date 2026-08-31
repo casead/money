@@ -10,13 +10,20 @@ namespace MoneyRecord.Application.Common.Settings;
 public static class SettingReader
 {
     /// <summary>Effective raw value for a key in the caller's shop scope.</summary>
-    public static Task<string?> EffectiveAsync(IMoneyRecordDbContext db, string key,
+    public static async Task<string?> EffectiveAsync(IMoneyRecordDbContext db, string key,
         long? shopId, CancellationToken ct)
-        => db.AppSettings.AsNoTracking()
+    {
+        // Load matching settings into memory for MongoDB compatibility
+        // (boolean expressions in OrderBy are not translatable).
+        var candidates = await db.AppSettings.AsNoTracking()
             .Where(s => s.Key == key && (s.ShopId == shopId || s.ShopId == null))
-            .OrderByDescending(s => s.ShopId != null) // shop override wins
+            .ToListAsync(ct);
+
+        return candidates
+            .OrderByDescending(s => s.ShopId.HasValue) // shop override wins
             .Select(s => s.Value)
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefault();
+    }
 
     /// <summary>Effective integer value; 0 when unset/unparseable.</summary>
     public static async Task<long> EffectiveIntAsync(IMoneyRecordDbContext db, string key,

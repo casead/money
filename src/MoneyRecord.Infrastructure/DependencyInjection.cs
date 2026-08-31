@@ -18,6 +18,9 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructure(this IServiceCollection services,
         IConfiguration configuration)
     {
+        // Register custom MongoDB serializers (DateOnly etc.) before any DB operations
+        MongoSerializers.Register();
+
         var connectionString = configuration.GetConnectionString("MoneyRecord")
             ?? throw new InvalidOperationException("Connection string 'MoneyRecord' is not configured.");
 

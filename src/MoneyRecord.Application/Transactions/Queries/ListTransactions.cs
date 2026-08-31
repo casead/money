@@ -111,6 +111,8 @@ public sealed class ListTransactionsQueryHandler
         var descending = !string.Equals(request.SortDir, "asc", StringComparison.OrdinalIgnoreCase);
         var byAmount = string.Equals(request.SortBy, "amount", StringComparison.OrdinalIgnoreCase);
 
+        var total = await query.CountAsync(ct);
+
         var ordered = (byAmount, descending) switch
         {
             (true, true) => query.OrderByDescending(t => t.Amount),
@@ -119,22 +121,30 @@ public sealed class ListTransactionsQueryHandler
             (_, false) => query.OrderBy(t => t.OccurredAtUtc)
         };
 
-        var total = await ordered.CountAsync(ct);
-        var rows = await ordered
+        var txns = await ordered
             .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(t => new TransactionListRow(
-                t.TxnNo,
-                t.OccurredAtUtc,
-                t.Type.ToString(),
-                t.CustomerNameSnapshot,
-                Domain.Common.MyanmarPhone.Mask(t.CustomerPhoneSnapshot),
-                t.WalletProvider.Code,
-                t.Amount,
-                t.FeeAmount,
-                false, // replaced below with role-aware visibility
-                0,     // profit computed below (never leaves server for staff)
-                t.Status.ToString()))
             .ToListAsync(ct);
+
+        var providerIds = txns.Select(t => t.WalletProviderId).Distinct().ToList();
+        var providers = providerIds.Count > 0
+            ? await _db.WalletProviders.AsNoTracking()
+                .Where(p => providerIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.Code, ct)
+            : new Dictionary<int, string>();
+
+        var rows = txns.Select(t => new TransactionListRow(
+            t.TxnNo,
+            t.OccurredAtUtc,
+            t.Type.ToString(),
+            t.CustomerNameSnapshot,
+            Domain.Common.MyanmarPhone.Mask(t.CustomerPhoneSnapshot),
+            providers.TryGetValue(t.WalletProviderId, out var pc) ? pc : "???",
+            t.Amount,
+            t.FeeAmount,
+            false,
+            0,
+            t.Status.ToString()))
+            .ToList();
 
         // Role-aware profit stripping (schema-level assert target TC-700b).
         var items = rows.Select(r => r with
