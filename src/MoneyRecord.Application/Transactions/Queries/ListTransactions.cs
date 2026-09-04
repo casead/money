@@ -38,7 +38,8 @@ public sealed record TransactionListRow(
     long FeeAmount,
     bool ShowProfitFields,
     long ProfitAmount,
-    string Status);
+    string Status,
+    string? ReversalOfTxnNo);
 
 public sealed class ListTransactionsQueryValidator : AbstractValidator<ListTransactionsQuery>
 {
@@ -132,6 +133,15 @@ public sealed class ListTransactionsQueryHandler
                 .ToDictionaryAsync(p => p.Id, p => p.Code, ct)
             : new Dictionary<int, string>();
 
+        var reversalIds = txns.Where(t => t.ReversalOfTxnId.HasValue)
+            .Select(t => t.ReversalOfTxnId!.Value).Distinct().ToList();
+        var reversalTxnNos = reversalIds.Count > 0
+            ? await _db.Transactions.AsNoTracking()
+                .Where(t => reversalIds.Contains(t.Id))
+                .Select(t => new { t.Id, t.TxnNo })
+                .ToDictionaryAsync(t => t.Id, t => t.TxnNo, ct)
+            : new Dictionary<long, string>();
+
         var rows = txns.Select(t => new TransactionListRow(
             t.TxnNo,
             t.OccurredAtUtc,
@@ -143,7 +153,10 @@ public sealed class ListTransactionsQueryHandler
             t.FeeAmount,
             false,
             0,
-            t.Status.ToString()))
+            t.Status.ToString(),
+            t.ReversalOfTxnId.HasValue &&
+                reversalTxnNos.TryGetValue(t.ReversalOfTxnId.Value, out var revNo)
+                ? revNo : null))
             .ToList();
 
         // Role-aware profit stripping (schema-level assert target TC-700b).
