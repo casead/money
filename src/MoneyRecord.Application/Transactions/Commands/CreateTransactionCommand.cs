@@ -21,8 +21,8 @@ public abstract record CreateTxnCommand : ICommand
 {
     public Guid IdempotencyKey { get; init; }
     public long? CustomerId { get; init; }
-    public string CustomerName { get; init; } = default!;
-    public string CustomerPhone { get; init; } = default!;
+    public string? CustomerName { get; init; }
+    public string? CustomerPhone { get; init; }
     public long WalletAccountId { get; init; }
     public long Amount { get; init; }
     public long? FeeAmountOverride { get; init; }
@@ -42,8 +42,8 @@ public abstract record CreateTxnCommand : ICommand
         var canonical = JsonSerializer.Serialize(new
         {
             customerId = CustomerId,
-            customerName = CustomerName.Trim(),
-            customerPhone = CustomerPhone.Trim(),
+            customerName = CustomerName?.Trim(),
+            customerPhone = CustomerPhone?.Trim(),
             walletAccountId = WalletAccountId,
             amount = Amount,
             feeAmountOverride = FeeAmountOverride,
@@ -93,10 +93,11 @@ public abstract class CreateTxnCommandValidator<T> : AbstractValidator<T>
             .NotEmpty().WithMessage("Idempotency-Key header လိုအပ်ပါသည်။");
 
         RuleFor(x => x.CustomerName)
-            .NotEmpty().Length(2, 100).WithMessage("Customer name သည် 2–100 လုံး ရှိရမည်။");
+            .MaximumLength(100).When(x => x.CustomerName is not null)
+            .WithMessage("Customer name သည် အမြင့်ဆုံး 100 လုံး ဖြစ်ရမည်။");
 
         RuleFor(x => x.CustomerPhone)
-            .Must(p => MyanmarPhone.TryNormalize(p) is not null)
+            .Must(p => p is null || MyanmarPhone.TryNormalize(p) is not null)
             .WithMessage("Phone သည် မြန်မာဖုန်း format (09XXXXXXXXX) ဖြစ်ရမည်။");
 
         RuleFor(x => x.WalletAccountId).GreaterThan(0);

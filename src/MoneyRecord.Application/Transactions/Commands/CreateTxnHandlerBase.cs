@@ -87,22 +87,28 @@ public abstract class CreateTxnHandlerBase<TCommand>
             return Result<TxnReceiptResponse>.Failure(ErrorCodes.InvalidOperation,
                 $"{walletProvider?.Name ?? "Provider"} provider ကို ပိတ်ထားသဖြင့် အသုံးပြုလို့မရပါ။");
 
-        var phone = MyanmarPhone.TryNormalize(request.CustomerPhone)!;
+        var phone = MyanmarPhone.TryNormalize(request.CustomerPhone);
 
         // ---- Customer auto-link (per-shop registry): a matching phone attaches
         //      the txn to the existing customer; an unknown phone AUTO-REGISTERS
         //      a new customer row so lifetime stats accumulate on the detail page.
         //      Concurrent first-registrations of the same phone are serialized by
-        //      UQ_Customers_Shop_Phone — the loser rolls back and retries clean. ----
-        var customer = await _db.Customers.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(c => c.ShopId == account.ShopId
-                                      && c.Phone == phone && !c.IsDeleted, ct);
-        if (customer is null)
+        //      UQ_Customers_Shop_Phone — the loser rolls back and retries clean.
+        //      When phone is null, customer lookup is skipped (anonymous txn). ----
+        long? customerId = null;
+        if (phone is not null)
         {
-            customer = Customer.Create(request.CustomerName, phone,
-                address: null, note: null, actorId, _clock, account.ShopId);
-            _db.Customers.Add(customer);
-            await _db.SaveChangesAsync(ct); // materializes CustomerId — same T1 txn
+            var customer = await _db.Customers.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.ShopId == account.ShopId
+                                          && c.Phone == phone && !c.IsDeleted, ct);
+            if (customer is null)
+            {
+                customer = Customer.Create(request.CustomerName ?? "Anonymous", phone,
+                    address: null, note: null, actorId, _clock, account.ShopId);
+                _db.Customers.Add(customer);
+                await _db.SaveChangesAsync(ct); // materializes CustomerId — same T1 txn
+            }
+            customerId = customer.Id;
         }
 
         var cashIn = Type == TransactionType.CashIn;
@@ -163,7 +169,7 @@ public abstract class CreateTxnHandlerBase<TCommand>
         var txn = Transaction.Complete(
             txnNo, Type, request.Amount, feeAmount, feeOverridden,
             appliedRuleId, feeVia, request.FeeDeductedFromAmount,
-            customer.Id, request.CustomerName, phone,
+            customerId, request.CustomerName, phone,
             account.WalletProviderId, account.Id, request.IdempotencyKey,
             request.Note, referenceNo: null, actorId, _clock,
             shopId: account.ShopId);
@@ -269,12 +275,15 @@ public abstract class CreateTxnHandlerBase<TCommand>
                 var db = scope.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
                 var clock = scope.ServiceProvider.GetRequiredService<IClock>();
                 var windowStart = clock.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
-                await db.Transactions.AsNoTracking()
-                    .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
-                                   t.Amount == amountCapture &&
-                                   t.Type == typeCapture &&
-                                   t.Status == TransactionStatus.Completed &&
-                                   t.OccurredAtUtc >= windowStart);
+                if (phone is not null)
+                {
+                    await db.Transactions.AsNoTracking()
+                        .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
+                                       t.Amount == amountCapture &&
+                                       t.Type == typeCapture &&
+                                       t.Status == TransactionStatus.Completed &&
+                                       t.OccurredAtUtc >= windowStart);
+                }
             }
             catch { /* best-effort */ }
         });
@@ -292,7 +301,7 @@ public abstract class CreateTxnHandlerBase<TCommand>
                         amount = amountCapture,
                         feeAmount = feeAmountCapture,
                         feePaidVia = feeViaCapture,
-                        customerPhone = MyanmarPhone.Mask(phone),
+                        customerPhone = phone is not null ? MyanmarPhone.Mask(phone) : null,
                         account = accountNameCapture,
                         balancesAfter = new
                         {

@@ -32,8 +32,8 @@ public sealed record TransactionDetailResponse(
     long CommissionAmount,
     long ProfitAmount,
     long? CustomerId,
-    string CustomerNameSnapshot,
-    string CustomerPhoneSnapshot,
+    string? CustomerNameSnapshot,
+    string? CustomerPhoneSnapshot,
     string ProviderCode,
     string AccountName,
     string? Note,
@@ -114,8 +114,8 @@ public sealed record TransactionSummaryItem(
     string Status,
     long Amount,
     DateTime OccurredAtUtc,
-    string CustomerNameSnapshot,
-    string CustomerPhoneMasked,
+    string? CustomerNameSnapshot,
+    string? CustomerPhoneMasked,
     string ProviderCode);
 
 public sealed class SearchTransactionsQueryValidator : AbstractValidator<SearchTransactionsQuery>
@@ -154,12 +154,12 @@ public sealed class SearchTransactionsQueryHandler
         query = phonePrefix is not null
             ? query.Where(t =>
                 t.TxnNo == term ||
-                t.CustomerPhoneSnapshot.StartsWith(phonePrefix) ||
-                t.CustomerNameSnapshot.Contains(term) ||
+                (t.CustomerPhoneSnapshot != null && t.CustomerPhoneSnapshot.StartsWith(phonePrefix)) ||
+                (t.CustomerNameSnapshot != null && t.CustomerNameSnapshot.Contains(term)) ||
                 (amountMatch && t.Amount == amt))
             : query.Where(t =>
                 t.TxnNo == term ||
-                t.CustomerNameSnapshot.Contains(term) ||
+                (t.CustomerNameSnapshot != null && t.CustomerNameSnapshot.Contains(term)) ||
                 (amountMatch && t.Amount == amt));
 
         var rows = await query
@@ -177,7 +177,7 @@ public sealed class SearchTransactionsQueryHandler
             new TransactionSummaryItem(
                 r.TxnNo, r.Type.ToString(), r.Status.ToString(), r.Amount,
                 r.OccurredAtUtc, r.CustomerNameSnapshot,
-                Domain.Common.MyanmarPhone.Mask(r.CustomerPhoneSnapshot),
+                Domain.Common.MyanmarPhone.Mask(r.CustomerPhoneSnapshot ?? ""),
                 r.ProviderCode)).ToList());
     }
 

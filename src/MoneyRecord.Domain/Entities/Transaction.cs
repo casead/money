@@ -73,9 +73,9 @@ public class Transaction
     public long? CustomerId { get; private set; }
 
     /// <summary>Immutable copy at completion time — registry edits never rewrite history (CF-03).</summary>
-    public string CustomerNameSnapshot { get; private set; } = default!;
+    public string? CustomerNameSnapshot { get; private set; }
 
-    public string CustomerPhoneSnapshot { get; private set; } = default!;
+    public string? CustomerPhoneSnapshot { get; private set; }
 
     public int WalletProviderId { get; private set; }
 
@@ -131,7 +131,7 @@ public class Transaction
     public static Transaction Complete(
         string txnNo, TransactionType type, long amount, long feeAmount, bool feeOverridden,
         int? feeRuleId, FeePaidVia feePaidVia, bool feeDeductedFromAmount,
-        long? customerId, string customerNameSnapshot, string customerPhoneSnapshot,
+        long? customerId, string? customerNameSnapshot, string? customerPhoneSnapshot,
         int walletProviderId, long walletAccountId, Guid idempotencyKey,
         string? note, string? referenceNo, long createdByUserId, IClock clock,
         long shopId)
@@ -162,7 +162,7 @@ public class Transaction
             NetAmount = netAmount,
             CommissionAmount = 0, // commission capture retrofits in the fee module (M9/BR-014)
             CustomerId = customerId,
-            CustomerNameSnapshot = customerNameSnapshot.Trim(),
+            CustomerNameSnapshot = customerNameSnapshot?.Trim(),
             CustomerPhoneSnapshot = customerPhoneSnapshot,
             WalletProviderId = walletProviderId,
             WalletAccountId = walletAccountId,
