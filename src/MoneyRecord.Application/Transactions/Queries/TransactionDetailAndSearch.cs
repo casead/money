@@ -60,8 +60,8 @@ public sealed class GetTransactionQueryHandler
     {
         var showProfit = ProfitVisibility.ShowProfit(_currentUser);
 
-        // Single JOIN query for transaction + provider + account (3 nav properties exist).
-        var result = await _db.Transactions.AsNoTracking()
+        // Step 1: Query transaction without navigation properties (MongoDB limitation).
+        var txn = await _db.Transactions.AsNoTracking()
             .Where(t => t.TxnNo == request.TxnNo
                         && t.ShopId == _currentUser.ShopId)
             .Select(t => new
@@ -70,36 +70,43 @@ public sealed class GetTransactionQueryHandler
                 t.CommissionAmount, t.CustomerId, t.CustomerNameSnapshot,
                 t.CustomerPhoneSnapshot, t.Note, t.BusinessDate, t.OccurredAtUtc,
                 t.CreatedByUserId, t.CancelledAtUtc, t.ReversalOfTxnId,
-                ProviderCode = t.WalletProvider.Code,
-                AccountName = t.WalletAccount.AccountName,
+                t.WalletProviderId, t.WalletAccountId,
             })
             .FirstOrDefaultAsync(ct);
 
-        if (result is null)
+        if (txn is null)
             return Result<TransactionDetailResponse>.Failure(
                 ErrorCodes.NotFound, "Transaction ရှာမတွေ့ပါ။");
 
-        // CreatedByUser has no nav property on Transaction — single extra query.
+        // Step 2: Separate queries for navigation data.
+        var providerCode = await _db.WalletProviders
+            .Where(wp => wp.Id == txn.WalletProviderId).Select(wp => wp.Code)
+            .FirstOrDefaultAsync(ct) ?? "?";
+
+        var accountName = await _db.WalletAccounts
+            .Where(wa => wa.Id == txn.WalletAccountId).Select(wa => wa.AccountName)
+            .FirstOrDefaultAsync(ct) ?? "?";
+
         var byUser = await _db.Users
-            .Where(u => u.Id == result.CreatedByUserId).Select(u => u.Username)
-            .FirstOrDefaultAsync(ct) ?? $"user:{result.CreatedByUserId}";
+            .Where(u => u.Id == txn.CreatedByUserId).Select(u => u.Username)
+            .FirstOrDefaultAsync(ct) ?? $"user:{txn.CreatedByUserId}";
 
         string? reversalOfTxnNo = null;
-        if (result.ReversalOfTxnId is { } rid)
+        if (txn.ReversalOfTxnId is { } rid)
             reversalOfTxnNo = await _db.Transactions
                 .Where(t => t.Id == rid).Select(t => t.TxnNo)
                 .FirstOrDefaultAsync(ct);
 
         return Result<TransactionDetailResponse>.Success(new TransactionDetailResponse(
-            result.TxnNo, result.Type.ToString(), result.Status.ToString(),
-            result.Amount, result.FeeAmount, result.FeeOverridden,
+            txn.TxnNo, txn.Type.ToString(), txn.Status.ToString(),
+            txn.Amount, txn.FeeAmount, txn.FeeOverridden,
             showProfit,
-            showProfit ? result.CommissionAmount : 0,
-            showProfit ? result.FeeAmount - result.CommissionAmount : 0,
-            result.CustomerId, result.CustomerNameSnapshot, result.CustomerPhoneSnapshot,
-            result.ProviderCode, result.AccountName, result.Note, result.BusinessDate,
-            result.OccurredAtUtc, byUser,
-            result.CancelledAtUtc?.ToString("O"), reversalOfTxnNo));
+            showProfit ? txn.CommissionAmount : 0,
+            showProfit ? txn.FeeAmount - txn.CommissionAmount : 0,
+            txn.CustomerId, txn.CustomerNameSnapshot, txn.CustomerPhoneSnapshot,
+            providerCode, accountName, txn.Note, txn.BusinessDate,
+            txn.OccurredAtUtc, byUser,
+            txn.CancelledAtUtc?.ToString("O"), reversalOfTxnNo));
     }
 }
 
@@ -169,16 +176,24 @@ public sealed class SearchTransactionsQueryHandler
             {
                 t.TxnNo, t.Type, t.Status, t.Amount, t.OccurredAtUtc,
                 t.CustomerNameSnapshot, t.CustomerPhoneSnapshot,
-                ProviderCode = t.WalletProvider.Code
+                t.WalletProviderId,
             })
             .ToListAsync(ct);
+
+        var providerIds = rows.Select(r => r.WalletProviderId).Distinct().ToList();
+        var providers = providerIds.Count > 0
+            ? await _db.WalletProviders.AsNoTracking()
+                .Where(wp => providerIds.Contains(wp.Id))
+                .Select(wp => new { wp.Id, wp.Code })
+                .ToDictionaryAsync(wp => wp.Id, wp => wp.Code, ct)
+            : new Dictionary<int, string>();
 
         return Result<List<TransactionSummaryItem>>.Success(rows.Select(r =>
             new TransactionSummaryItem(
                 r.TxnNo, r.Type.ToString(), r.Status.ToString(), r.Amount,
                 r.OccurredAtUtc, r.CustomerNameSnapshot,
                 Domain.Common.MyanmarPhone.Mask(r.CustomerPhoneSnapshot ?? ""),
-                r.ProviderCode)).ToList());
+                providers.TryGetValue(r.WalletProviderId, out var pc) ? pc : "???")).ToList());
     }
 
     private static string? MyanmarPhonePrefix(string term)
