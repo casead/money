@@ -40,6 +40,9 @@ public sealed class MoneyRecordDbContextAdapter : IMoneyRecordDbContext
 
     public DatabaseFacade Database => _db.Database;
 
+    public EntityEntry<TEntity> Entry<TEntity>(TEntity entity) where TEntity : class
+        => _db.Entry(entity);
+
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         => _db.SaveChangesAsync(cancellationToken);
 

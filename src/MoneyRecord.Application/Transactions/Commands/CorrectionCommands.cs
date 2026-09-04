@@ -134,6 +134,7 @@ public sealed class CancelTransactionCommandHandler
         // ---- Terminal flip + compensating cache/ledger writes — one atomic
         //      business transaction (TxBehavior commit/rollback covers all). ----
         current.MarkCancelled(actorId, request.Reason, _clock.UtcNow);
+        _db.Entry(current).Property(t => t.Status).IsModified = true;
 
         trackedCash.ApplyAdjustment(
             cashDecreases ? LedgerDirection.Decrease : LedgerDirection.Increase,
@@ -406,6 +407,7 @@ public sealed class ReverseTransactionCommandHandler
                 _clock.UtcNow));
 
         current.MarkReversed(actorId, request.Reason, _clock.UtcNow, mirrorTxnId: mirror.Id);
+        _db.Entry(current).Property(t => t.Status).IsModified = true;
         _db.TransactionReversals.Add(TransactionReversal.Create(
             current.Id, mirror.Id, request.Reason, actorId, _clock.UtcNow));
 

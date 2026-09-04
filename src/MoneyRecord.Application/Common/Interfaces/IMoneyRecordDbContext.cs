@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using MoneyRecord.Domain.Entities;
 
@@ -39,6 +40,8 @@ public interface IMoneyRecordDbContext
     DatabaseFacade Database { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+
+    EntityEntry<TEntity> Entry<TEntity>(TEntity entity) where TEntity : class;
 
     /// <summary>Drops all tracked entities (used by TransactionBehavior between retry attempts).</summary>
     Task ClearTrackedEntitiesAsync(CancellationToken cancellationToken = default);
