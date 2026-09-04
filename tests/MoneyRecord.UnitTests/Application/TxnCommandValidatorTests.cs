@@ -120,6 +120,51 @@ public class TxnCommandValidatorTests
         c.ComputeRequestHash().Should().NotBe(a.ComputeRequestHash());
     }
 
+    [Fact]
+    public void NullNameAndPhone_Pass()
+    {
+        var cmd = new CreateCashInCommand
+        {
+            IdempotencyKey = Guid.NewGuid(),
+            CustomerName = null,
+            CustomerPhone = null,
+            WalletAccountId = 1,
+            Amount = 100_000,
+            FeePaidVia = "cash"
+        };
+        _in.TestValidate(cmd).ShouldNotHaveAnyValidationErrors();
+    }
+
+    [Fact]
+    public void NullNameAndPhone_TransactionComplete_Succeeds()
+    {
+        var txn = Transaction.Complete(
+            "TXN-2026-00001", TransactionType.CashIn, 100_000, 500, false,
+            null, FeePaidVia.Cash, false, null, null, null, 1, 1,
+            Guid.NewGuid(), null, null, 1, new FixedClock(), shopId: 1);
+
+        txn.CustomerNameSnapshot.Should().BeNull();
+        txn.CustomerPhoneSnapshot.Should().BeNull();
+        txn.CustomerId.Should().BeNull();
+        txn.IsCompleted.Should().BeTrue();
+    }
+
+    [Fact]
+    public void NullNameAndPhone_HashDiffers_FromWithPhone()
+    {
+        var withPhone = new CreateCashInCommand
+        {
+            IdempotencyKey = Guid.NewGuid(),
+            CustomerName = "Test",
+            CustomerPhone = "09770001112",
+            WalletAccountId = 1,
+            Amount = 100_000,
+            FeePaidVia = "cash"
+        };
+        var withoutPhone = withPhone with { CustomerName = null, CustomerPhone = null };
+        withPhone.ComputeRequestHash().Should().NotBe(withoutPhone.ComputeRequestHash());
+    }
+
     private static CreateCashOutCommand ToOut(CreateCashInCommand src) => new()
     {
         IdempotencyKey = src.IdempotencyKey,
