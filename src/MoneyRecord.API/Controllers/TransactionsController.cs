@@ -193,8 +193,8 @@ public class TransactionsController : ControllerBase
 
     public sealed record TxnCreateRequest(
         long? CustomerId,
-        string CustomerName,
-        string CustomerPhone,
+        string? CustomerName,
+        string? CustomerPhone,
         long WalletAccountId,
         long Amount,
         long? FeeAmountOverride,
