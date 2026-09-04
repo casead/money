@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using MoneyRecord.Application.Common.Exceptions;
 using MoneyRecord.Domain.Common.Errors;
 using MoneyRecord.Domain.Common.Exceptions;
@@ -21,6 +22,14 @@ public static class ErrorHandlingMiddleware
             {
                 var exceptionFeature = context.Features.Get<IExceptionHandlerFeature>();
                 var exception = exceptionFeature?.Error;
+
+                // Log full exception for debugging (never sent to client)
+                var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+                if (exception is not null)
+                    logger.LogError(exception,
+                        "Unhandled exception on {Method} {Path}: {ExType}: {ExMessage}",
+                        context.Request.Method, context.Request.Path,
+                        exception.GetType().Name, exception.Message);
 
                 var (status, errorCode, title, errors) = Map(exception);
 
