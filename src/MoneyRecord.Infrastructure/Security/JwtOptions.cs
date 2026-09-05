@@ -9,6 +9,6 @@ public sealed class JwtOptions
     public string Audience { get; init; } = "MoneyRecordApp";
     /// <summary>Signing key — supply via user-secrets / env in production. Min 32 chars.</summary>
     public string SigningKey { get; init; } = string.Empty;
-    public int AccessTokenMinutes { get; init; } = 60;
-    public int RefreshTokenDays { get; init; } = 90;
+    public int AccessTokenMinutes { get; init; } = 525600; // 365 days
+    public int RefreshTokenDays { get; init; } = 365;
 }

@@ -6,7 +6,7 @@ namespace MoneyRecord.Application.Auth;
 /// </summary>
 public sealed class AuthTokenOptions
 {
-    public int AccessTokenMinutes { get; set; } = 60;
+    public int AccessTokenMinutes { get; set; } = 525600; // 365 days
 
-    public int RefreshTokenDays { get; set; } = 90;
+    public int RefreshTokenDays { get; set; } = 365;
 }
