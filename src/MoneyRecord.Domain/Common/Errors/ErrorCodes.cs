@@ -24,6 +24,7 @@ public static class ErrorCodes
 
     // ---- Auth / MFA (SEC-00x hardening) ----
     public const string MfaRequired = "MFA_REQUIRED";
+    public const string TokenAlreadyConsumed = "TOKEN_ALREADY_CONSUMED";
 
     // ---- Balances (API-007 BAL-003 / BR-034) ----
     public const string InsufficientForDecrease = "INSUFFICIENT_FOR_DECREASE";
