@@ -65,15 +65,6 @@ public sealed class RefreshCommandHandler : IRequestHandler<RefreshCommand, Resu
             return Result<LoginResponse>.Failure(ErrorCodes.Unauthorized,
                 "Session သက်တမ်းကုန်သွားပါပြီ။");
 
-        // Device binding check (AUTH-003 rule): same device required
-        if (stored.DeviceInfo is not null &&
-            _requestContext.DeviceInfo is not null &&
-            !string.Equals(stored.DeviceInfo, _requestContext.DeviceInfo, StringComparison.Ordinal))
-        {
-            return Result<LoginResponse>.Failure(ErrorCodes.Unauthorized,
-                "Device မတူညီပါ။");
-        }
-
         // User must still be active
         if (user is null || !user.IsActive || user.IsDeleted)
             return Result<LoginResponse>.Failure(ErrorCodes.Forbidden,
