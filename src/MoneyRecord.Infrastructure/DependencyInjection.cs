@@ -5,6 +5,7 @@ using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Domain.Entities;
 using MoneyRecord.Infrastructure.Persistence;
 using MoneyRecord.Infrastructure.Security;
+using MoneyRecord.Application.Notifications.Services;
 using MoneyRecord.Infrastructure.Services;
 using MongoDB.Driver;
 
@@ -45,6 +46,8 @@ public static class DependencyInjection
         services.AddScoped<MoneyRecord.Application.Common.Interfaces.IMoneyRecordDbContext,
             MoneyRecordDbContextAdapter>();
         services.AddScoped<MoneyRecord.Application.Common.Interfaces.IAuditLogger, AuditLogger>();
+        services.AddScoped<INotificationService, NotificationService>();
+        services.AddSingleton<IFcmSender, FirebaseFcmSender>();
         services.AddScoped<MoneyRecord.Application.Customers.Common.ICustomerTransactionStats,
             MoneyRecord.Infrastructure.Persistence.CustomerTransactionStatsService>();
 

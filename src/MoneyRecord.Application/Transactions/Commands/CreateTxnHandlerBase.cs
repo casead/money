@@ -6,6 +6,7 @@ using MoneyRecord.Application.Common.Behaviors;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Application.Common.Models;
 using MoneyRecord.Application.Fees.Services;
+using MoneyRecord.Application.Notifications.Services;
 using MoneyRecord.Domain.Common.Errors;
 using MoneyRecord.Domain.Common.Exceptions;
 using MoneyRecord.Domain.Common.Rbac;
@@ -37,12 +38,13 @@ public abstract class CreateTxnHandlerBase<TCommand>
     private readonly ICurrentUser _currentUser;
     private readonly IAuditLogger _audit;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly INotificationService _notificationService;
 
     protected CreateTxnHandlerBase(IMoneyRecordDbContext db, IBalanceLocker locker,
         IIdempotencyStore idempotency, ITxnNumberGenerator txnNumbers,
         IFeeCalculator feeCalculator, IClock clock,
         ICurrentUser currentUser, IAuditLogger audit,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory, INotificationService notificationService)
     {
         _db = db;
         _locker = locker;
@@ -53,6 +55,7 @@ public abstract class CreateTxnHandlerBase<TCommand>
         _currentUser = currentUser;
         _audit = audit;
         _scopeFactory = scopeFactory;
+        _notificationService = notificationService;
     }
 
     protected abstract TransactionType Type { get; }
@@ -153,10 +156,18 @@ public abstract class CreateTxnHandlerBase<TCommand>
         // Cash In:  wallet must have enough float for the full Amount.
         // Cash Out: shop must have enough cash to pay the customer.
         //           When fee is deducted from amount, customer receives (Amount − Fee).
+        // Credit exception: ပေးရန်ရှိ (payable, creditMethod='cash') moves cash ↑ ONLY at
+        // creation — wallet is untouched now (it moves at settlement), so a 0-balance
+        // shop can still record the obligation. ရရန်ရှိ (wallet ↓ now) and non-credit
+        // CashIn keep the hard float floor (negative balance is never created silently).
         long cashNeeded = request.Amount;
         if (!cashIn && request.FeeDeductedFromAmount && feeAmount > 0)
             cashNeeded = request.Amount - feeAmount;
-        if (cashIn && request.Amount > floatBefore)
+        var creditMethod = request.IsCredit
+            ? request.CreditPaymentMethod?.Trim().ToLowerInvariant() ?? "cash"
+            : null;
+        var isCreditPayable = request.IsCredit && creditMethod != "ewallet";
+        if (cashIn && !isCreditPayable && request.Amount > floatBefore)
             throw new InsufficientFloatException(floatBefore);
         if (!cashIn && cashNeeded > cashBefore)
             throw new InsufficientCashException(cashBefore);
@@ -172,12 +183,80 @@ public abstract class CreateTxnHandlerBase<TCommand>
             customerId, request.CustomerName, phone,
             account.WalletProviderId, account.Id, request.IdempotencyKey,
             request.Note, referenceNo: null, actorId, _clock,
-            shopId: account.ShopId);
+            shopId: account.ShopId, isCredit: request.IsCredit,
+            creditPaymentMethod: request.IsCredit
+                ? request.CreditPaymentMethod?.Trim().ToLowerInvariant() ?? "cash"
+                : "cash");
         _db.Transactions.Add(txn);
 
         // Persist now: materializes txn.Id (ledger FKs) and the idempotency
         // reservation inserted by ReserveAsync — all inside the T1 transaction.
         await _db.SaveChangesAsync(ct);
+
+        // ---- Credit transactions: ONE side updates immediately ----
+        // ပေးရန်ရှိ (creditMethod='cash')   → cash updates now,  wallet settles later
+        // ရရန်ရှိ (creditMethod='ewallet') → wallet updates now, cash settles later
+        if (request.IsCredit)
+        {
+            if (creditMethod == "cash")
+            {
+                // ပေးရန်ရှိ: physical cash already received → cash balance now
+                var creditCashDirection = cashIn ? LedgerDirection.Increase : LedgerDirection.Decrease;
+                lockedCash.ApplyAdjustment(creditCashDirection, request.Amount, actorId, _clock);
+                _db.CashLedgerEntries.Add(CashLedgerEntry.ForTransactionCore(
+                    txn.Id, creditCashDirection, request.Amount,
+                    lockedCash.CurrentCashBalance, actorId, txn.OccurredAtUtc));
+            }
+            else
+            {
+                // ရရန်ရှိ: e-wallet already sent → wallet balance now
+                var creditWalletDirection = cashIn ? LedgerDirection.Decrease : LedgerDirection.Increase;
+                lockedWallet.ApplyAdjustment(creditWalletDirection, request.Amount, actorId, _clock);
+                _db.WalletLedgerEntries.Add(WalletLedgerEntry.ForTransactionCore(
+                    account.Id, txn.Id, creditWalletDirection, request.Amount,
+                    lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
+            }
+
+            await _db.SaveChangesAsync(ct);
+
+            var creditReceipt = new TxnReceiptResponse(
+                txn.TxnNo,
+                txn.Status.ToString(),
+                txn.Amount,
+                txn.FeeAmount,
+                txn.FeePaidVia == FeePaidVia.WalletFloat ? "wallet" : "cash",
+                NetAmount: txn.NetAmount ?? txn.Amount,
+                CommissionAmount: 0,
+                ShowProfitFields: isAdmin,
+                ProfitAmount: 0,
+                new BalancesAfter(lockedCash.CurrentCashBalance, lockedWallet.CurrentFloatBalance),
+                ReceiptUrl: $"/transactions/{txn.TxnNo}/receipt",
+                DuplicateWarning: false,
+                txn.OccurredAtUtc,
+                txn.BusinessDate,
+                IsReplay: false,
+                IsCredit: true);
+
+            await _idempotency.CompleteAsync(
+                request.IdempotencyKey, JsonSerializer.Serialize(creditReceipt), ct);
+
+            try
+            {
+                var providerName = walletProvider?.Name ?? "E-Wallet";
+                var creditType = txn.CreditPaymentMethod == "ewallet" ? "ရရန်ရှိ" : "ပေးရန်ရှိ";
+                var notiTitle = $"{request.CustomerName ?? "Customer"} - {request.Amount:N0} Ks";
+                var notiMessage = $"{creditType}: {providerName} အတွက် အကြွေးထည့်ပေးပြီ";
+                var notiData = JsonSerializer.Serialize(new { txnNo = txn.TxnNo, screen = "credit" });
+
+                await _notificationService.NotifyAsync(
+                    account.ShopId, null,
+                    NotificationType.CreditCreated,
+                    notiTitle, notiMessage, notiData, ct);
+            }
+            catch { /* best-effort notification */ }
+
+            return Result<TxnReceiptResponse>.Success(creditReceipt);
+        }
 
         // ---- Dual-ledger writes (BRL §4.C.2 / §4.D.2 + BR-012-ext fee movement) ----
         // Principal: Cash In → cash +A / wallet −A ; Cash Out → cash −A / wallet +A.
@@ -250,6 +329,13 @@ public abstract class CreateTxnHandlerBase<TCommand>
 
         // Persist balance updates + ledger entries (MongoDB has no wrapping transaction).
         await _db.SaveChangesAsync(ct);
+
+        if (walletDirection == LedgerDirection.Increase)
+        {
+            await CreditReminderNotifier.TryNotifyAsync(
+                _db, _notificationService, account.ShopId, account.Id,
+                lockedWallet.CurrentFloatBalance, ct);
+        }
 
         await _idempotency.CompleteAsync(
             request.IdempotencyKey, JsonSerializer.Serialize(receipt), ct);
@@ -359,5 +445,6 @@ public abstract class CreateTxnHandlerBase<TCommand>
             duplicateWarning,
             txn.OccurredAtUtc,
             txn.BusinessDate,
-            isReplay);
+            isReplay,
+            txn.IsCredit);
 }

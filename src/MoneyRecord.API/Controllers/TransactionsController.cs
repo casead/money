@@ -47,7 +47,9 @@ public class TransactionsController : ControllerBase
             FeeOverrideReason = body.FeeOverrideReason,
             FeePaidVia = body.FeePaidVia,
             FeeDeductedFromAmount = body.FeeDeductedFromAmount,
-            Note = body.Note
+            Note = body.Note,
+            IsCredit = body.IsCredit,
+            CreditPaymentMethod = body.CreditPaymentMethod
         }, ct);
 
         if (!result.IsSuccess)
@@ -84,7 +86,9 @@ public class TransactionsController : ControllerBase
             FeeOverrideReason = body.FeeOverrideReason,
             FeePaidVia = body.FeePaidVia,
             FeeDeductedFromAmount = body.FeeDeductedFromAmount,
-            Note = body.Note
+            Note = body.Note,
+            IsCredit = body.IsCredit,
+            CreditPaymentMethod = body.CreditPaymentMethod
         }, ct);
 
         if (!result.IsSuccess)
@@ -181,6 +185,58 @@ public class TransactionsController : ControllerBase
             new { data = result.Value });
     }
 
+    /// <summary>List credit transactions with filtering.</summary>
+    [HttpGet("credits")]
+    public async Task<IActionResult> ListCredits(
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 20,
+        [FromQuery] string? creditType = null, [FromQuery] string? status = null,
+        [FromQuery] string? sortBy = null, [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
+    {
+        var result = await _sender.Send(new ListCreditsQuery(
+            page, pageSize, creditType, status, sortBy, sortDir), ct);
+        if (!result.IsSuccess) return ApiProblem.From(result, HttpContext);
+        return Ok(new
+        {
+            data = result.Value.Items,
+            pagination = new
+            {
+                page = result.Value.Pagination.Page,
+                pageSize = result.Value.Pagination.PageSize,
+                totalItems = result.Value.Pagination.TotalItems,
+                totalPages = result.Value.Pagination.TotalPages
+            }
+        });
+    }
+
+    /// <summary>Confirm a credit transaction.</summary>
+    [HttpPost("{txnNo}/confirm-credit")]
+    [Authorize(Policy = Permissions.TxnCreate)]
+    public async Task<IActionResult> ConfirmCredit(string txnNo, CancellationToken ct)
+    {
+        var result = await _sender.Send(new ConfirmCreditCommand(txnNo), ct);
+        return result.IsSuccess ? Ok(new { data = result.Value }) : ApiProblem.From(result, HttpContext);
+    }
+
+    /// <summary>Settle a credit transaction.</summary>
+    [HttpPost("{txnNo}/settle-credit")]
+    [Authorize(Policy = Permissions.TxnCreate)]
+    public async Task<IActionResult> SettleCredit(string txnNo, [FromBody] SettleCreditRequest body,
+        CancellationToken ct)
+    {
+        var result = await _sender.Send(new SettleCreditCommand(
+            txnNo, body.Method, body.WalletAccountId, body.Amount, body.Note,
+            body.AllowNegativeBalance ?? false), ct);
+        return result.IsSuccess ? Ok(new { data = result.Value }) : ApiProblem.From(result, HttpContext);
+    }
+
+    public sealed record SettleCreditRequest(
+        string Method,
+        long? WalletAccountId,
+        long? Amount,
+        string? Note,
+        bool? AllowNegativeBalance);
+
     // ---- helpers ----
 
     private (bool Ok, Guid Key) ParseIdempotencyKey()
@@ -191,17 +247,19 @@ public class TransactionsController : ControllerBase
         return (false, default);
     }
 
-    public sealed record TxnCreateRequest(
-        long? CustomerId,
-        string? CustomerName,
-        string? CustomerPhone,
-        long WalletAccountId,
-        long Amount,
-        long? FeeAmountOverride,
-        string? FeeOverrideReason,
-        string FeePaidVia,
-        bool FeeDeductedFromAmount,
-        string? Note);
+     public sealed record TxnCreateRequest(
+         long? CustomerId,
+         string? CustomerName,
+         string? CustomerPhone,
+         long WalletAccountId,
+         long Amount,
+         long? FeeAmountOverride,
+         string? FeeOverrideReason,
+         string FeePaidVia,
+         bool FeeDeductedFromAmount,
+         string? Note,
+         bool IsCredit,
+         string? CreditPaymentMethod);
 
     public sealed record TxnCorrectionRequest(string Reason);
 

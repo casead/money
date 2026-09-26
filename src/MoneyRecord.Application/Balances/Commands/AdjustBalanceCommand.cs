@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MoneyRecord.Application.Common.Behaviors;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Application.Common.Models;
+using MoneyRecord.Application.Notifications.Services;
 using MoneyRecord.Domain.Common.Errors;
 using MoneyRecord.Domain.Entities;
 
@@ -75,15 +76,18 @@ public sealed class AdjustBalanceCommandHandler
     private readonly IClock _clock;
     private readonly ICurrentUser _currentUser;
     private readonly IAuditLogger _audit;
+    private readonly INotificationService _notificationService;
 
     public AdjustBalanceCommandHandler(IMoneyRecordDbContext db, IBalanceLocker locker,
-        IClock clock, ICurrentUser currentUser, IAuditLogger audit)
+        IClock clock, ICurrentUser currentUser, IAuditLogger audit,
+        INotificationService notificationService)
     {
         _db = db;
         _locker = locker;
         _clock = clock;
         _currentUser = currentUser;
         _audit = audit;
+        _notificationService = notificationService;
     }
 
     public async Task<Result<AdjustmentResponse>> Handle(AdjustBalanceCommand request,
@@ -210,6 +214,12 @@ public sealed class AdjustBalanceCommandHandler
         await AuditAsync($"wallet:{accountId}", adjustment.Id, dir, amount,
             newBalance, ct);
         await _db.SaveChangesAsync(ct);
+
+        if (dir == LedgerDirection.Increase)
+        {
+            await CreditReminderNotifier.TryNotifyAsync(
+                _db, _notificationService, account.ShopId, accountId, newBalance, ct);
+        }
 
         return Result<AdjustmentResponse>.Success(
             new AdjustmentResponse(adjustment.Id, $"wallet:{accountId}", newBalance, entry.Id));

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Application.Common.Models;
 using MoneyRecord.Application.Fees.Services;
+using MoneyRecord.Application.Notifications.Services;
 using MoneyRecord.Domain.Entities;
 
 namespace MoneyRecord.Application.Transactions.Commands;
@@ -18,8 +19,8 @@ public sealed class CreateCashInHandler : CreateTxnHandlerBase<CreateCashInComma
         IIdempotencyStore idempotency, ITxnNumberGenerator txnNumbers,
         IFeeCalculator feeCalculator, IClock clock,
         ICurrentUser currentUser, IAuditLogger audit,
-        IServiceScopeFactory scopeFactory)
-        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit, scopeFactory)
+        IServiceScopeFactory scopeFactory, INotificationService notificationService)
+        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit, scopeFactory, notificationService)
     {
     }
 
@@ -38,8 +39,8 @@ public sealed class CreateCashOutHandler : CreateTxnHandlerBase<CreateCashOutCom
         IIdempotencyStore idempotency, ITxnNumberGenerator txnNumbers,
         IFeeCalculator feeCalculator, IClock clock,
         ICurrentUser currentUser, IAuditLogger audit,
-        IServiceScopeFactory scopeFactory)
-        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit, scopeFactory)
+        IServiceScopeFactory scopeFactory, INotificationService notificationService)
+        : base(db, locker, idempotency, txnNumbers, feeCalculator, clock, currentUser, audit, scopeFactory, notificationService)
     {
     }
 

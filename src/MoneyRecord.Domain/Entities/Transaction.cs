@@ -3,6 +3,7 @@ namespace MoneyRecord.Domain.Entities;
 using MoneyRecord.Domain.Common;
 using MoneyRecord.Domain.Common.Errors;
 using MoneyRecord.Domain.Common.Exceptions;
+using CreditStatusEnum = MoneyRecord.Domain.Entities.CreditStatus;
 
 /// <summary>Lookup (DBD T09): 1=CashIn, 2=CashOut.</summary>
 public enum TransactionType : byte
@@ -29,6 +30,15 @@ public enum FeePaidVia : byte
 {
     Cash = 1,
     WalletFloat = 2
+}
+
+/// <summary>Credit status: 1=Pending, 2=Confirmed, 3=Settled, 4=Cancelled.</summary>
+public enum CreditStatus : byte
+{
+    Pending = 1,
+    Confirmed = 2,
+    Settled = 3,
+    Cancelled = 4
 }
 
 /// <summary>
@@ -95,6 +105,25 @@ public class Transaction
     /// <summary>BR-031: unique logical submission key (UQ).</summary>
     public Guid IdempotencyKey { get; private set; }
 
+    // ---- Credit fields ----
+
+    /// <summary>When true, this is a credit transaction (balance not updated on creation).</summary>
+    public bool IsCredit { get; private set; }
+
+    /// <summary>Credit settlement status. Null when IsCredit=false.</summary>
+    public CreditStatus? CreditStatus { get; private set; }
+
+    /// <summary>Which side was already done when recording credit: 'cash' (cash received) or 'ewallet' (e-wallet sent).</summary>
+    public string? CreditPaymentMethod { get; private set; }
+
+    public DateTime? ConfirmedAtUtc { get; private set; }
+
+    public long? ConfirmedByUserId { get; private set; }
+
+    public DateTime? SettledAtUtc { get; private set; }
+
+    public long? SettledByUserId { get; private set; }
+
     // ---- Correction chain (populated from M8) ----
 
     public long? ReversedByTxnId { get; private set; }
@@ -134,7 +163,7 @@ public class Transaction
         long? customerId, string? customerNameSnapshot, string? customerPhoneSnapshot,
         int walletProviderId, long walletAccountId, Guid idempotencyKey,
         string? note, string? referenceNo, long createdByUserId, IClock clock,
-        long shopId)
+        long shopId, bool isCredit = false, string creditPaymentMethod = "cash")
     {
         if (amount <= 0)
             throw new BusinessRuleException(ErrorCodes.InvalidOperation,
@@ -170,6 +199,9 @@ public class Transaction
             Note = note?.Trim(),
             ReferenceNo = referenceNo,
             IdempotencyKey = idempotencyKey,
+            IsCredit = isCredit,
+            CreditStatus = isCredit ? CreditStatusEnum.Pending : null,
+            CreditPaymentMethod = isCredit ? creditPaymentMethod?.Trim().ToLowerInvariant() : null,
             BusinessDate = clock.TodayYangon,
             OccurredAtUtc = now,
             CreatedByUserId = createdByUserId,
@@ -217,5 +249,34 @@ public class Transaction
         if (!IsCompleted)
             throw new ConflictStateException(
                 $"TXN {TxnNo} သည် terminal state ({Status}) ဖြစ်နေပြီး ပြောင်းလို့မရပါ။");
+    }
+
+    public void ConfirmCredit(long actorUserId, DateTime utc)
+    {
+        if (!IsCredit) throw new BusinessRuleException(ErrorCodes.InvalidOperation, "Credit မဟုတ်ပါ။");
+        if (CreditStatus != CreditStatusEnum.Pending) throw new ConflictStateException("Credit status သည် Pending မဟုတ်ပါ။");
+        CreditStatus = CreditStatusEnum.Confirmed;
+        ConfirmedAtUtc = utc;
+        ConfirmedByUserId = actorUserId;
+    }
+
+    public void SettleCredit(long actorUserId, DateTime utc)
+    {
+        if (!IsCredit) throw new BusinessRuleException(ErrorCodes.InvalidOperation, "Credit မဟုတ်ပါ။");
+        if (CreditStatus is not (CreditStatusEnum.Pending or CreditStatusEnum.Confirmed))
+            throw new ConflictStateException("Credit status သည် Pending/Confirmed မဟုတ်ပါ။");
+        CreditStatus = CreditStatusEnum.Settled;
+        SettledAtUtc = utc;
+        SettledByUserId = actorUserId;
+    }
+
+    public void CancelCredit(long actorUserId, DateTime utc)
+    {
+        if (!IsCredit) throw new BusinessRuleException(ErrorCodes.InvalidOperation, "Credit မဟုတ်ပါ။");
+        if (CreditStatus is CreditStatusEnum.Settled or CreditStatusEnum.Cancelled)
+            throw new ConflictStateException("Credit status သည် Settled/Cancelled ဖြစ်နေပြီ။");
+        CreditStatus = CreditStatusEnum.Cancelled;
+        SettledAtUtc = utc;
+        SettledByUserId = actorUserId;
     }
 }

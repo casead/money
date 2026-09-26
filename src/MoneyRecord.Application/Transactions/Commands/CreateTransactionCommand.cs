@@ -36,6 +36,11 @@ public abstract record CreateTxnCommand : ICommand
 
     public string? Note { get; init; }
 
+    public bool IsCredit { get; init; }
+
+    /// <summary>Which side was already done: 'cash' (cash received) or 'ewallet' (e-wallet sent).</summary>
+    public string? CreditPaymentMethod { get; init; }
+
     /// <summary>Canonical hash for idempotency payload comparison (TC-600e).</summary>
     public string ComputeRequestHash()
     {
@@ -49,7 +54,9 @@ public abstract record CreateTxnCommand : ICommand
             feeAmountOverride = FeeAmountOverride,
             feePaidVia = FeePaidVia.Trim().ToLowerInvariant(),
             feeDeductedFromAmount = FeeDeductedFromAmount,
-            note = Note
+            note = Note,
+            isCredit = IsCredit,
+            creditPaymentMethod = CreditPaymentMethod?.Trim().ToLowerInvariant()
         });
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
@@ -78,7 +85,8 @@ public sealed record TxnReceiptResponse(
     bool DuplicateWarning,
     DateTime OccurredAtUtc,
     DateOnly BusinessDate,
-    bool IsReplay);
+    bool IsReplay,
+    bool IsCredit);
 
 public sealed record BalancesAfter(long CashBalance, long FloatBalance);
 

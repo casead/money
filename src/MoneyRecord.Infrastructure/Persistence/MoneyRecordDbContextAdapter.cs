@@ -37,6 +37,8 @@ public sealed class MoneyRecordDbContextAdapter : IMoneyRecordDbContext
     public DbSet<CommissionEntry> CommissionEntries => _db.CommissionEntries;
     public DbSet<IdempotencyKey> IdempotencyKeys => _db.IdempotencyKeys;
     public DbSet<AppSetting> AppSettings => _db.AppSettings;
+    public DbSet<Notification> Notifications => _db.Notifications;
+    public DbSet<FcmToken> FcmTokens => _db.FcmTokens;
 
     public DatabaseFacade Database => _db.Database;
 
@@ -101,16 +103,19 @@ public sealed class AuditLogger : IAuditLogger
         string? oldValue = null, string? newValue = null,
         CancellationToken ct = default)
     {
-        _db.AuditLogs.Add(AuditLog.Create(
-            actionCode, entityType, entityId,
-            oldValuesJson: oldValue, newValuesJson: newValue,
-            ipAddress: _requestContext.IpAddress,
-            deviceInfo: _requestContext.DeviceInfo,
-            actorUserId: _currentUser?.UserId,
-            clock: _clock,
-            shopId: _currentUser?.ShopId));
-        // Saved by the handler's/behavior's SaveChangesAsync to keep the command atomic.
+        // SOFT-DISABLED: audit logging paused to save DB space.
+        // To re-enable, remove this line and uncomment the block below.
         return Task.CompletedTask;
+
+        // _db.AuditLogs.Add(AuditLog.Create(
+        //     actionCode, entityType, entityId,
+        //     oldValuesJson: oldValue, newValuesJson: newValue,
+        //     ipAddress: _requestContext.IpAddress,
+        //     deviceInfo: _requestContext.DeviceInfo,
+        //     actorUserId: _currentUser?.UserId,
+        //     clock: _clock,
+        //     shopId: _currentUser?.ShopId));
+        // return Task.CompletedTask;
     }
 }
 

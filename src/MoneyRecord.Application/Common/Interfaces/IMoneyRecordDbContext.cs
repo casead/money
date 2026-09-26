@@ -36,6 +36,8 @@ public interface IMoneyRecordDbContext
     DbSet<CommissionEntry> CommissionEntries { get; }
     DbSet<IdempotencyKey> IdempotencyKeys { get; }
     DbSet<AppSetting> AppSettings { get; }
+    DbSet<Notification> Notifications { get; }
+    DbSet<FcmToken> FcmTokens { get; }
 
     DatabaseFacade Database { get; }
 

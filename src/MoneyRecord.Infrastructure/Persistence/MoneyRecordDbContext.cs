@@ -55,6 +55,8 @@ public class MoneyRecordDbContext : DbContext
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<TransactionTypeSeed> TransactionTypeSeeds => Set<TransactionTypeSeed>();
     public DbSet<TransactionStatusSeed> TransactionStatusSeeds => Set<TransactionStatusSeed>();
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<FcmToken> FcmTokens => Set<FcmToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -86,6 +88,8 @@ public class MoneyRecordDbContext : DbContext
         modelBuilder.Entity<AppSetting>().ToCollection("appSettings");
         modelBuilder.Entity<TransactionTypeSeed>().ToCollection("transactionTypes");
         modelBuilder.Entity<TransactionStatusSeed>().ToCollection("transactionStatuses");
+        modelBuilder.Entity<Notification>().ToCollection("notifications");
+        modelBuilder.Entity<FcmToken>().ToCollection("fcmTokens");
 
         // DateOnly ↔ DateTime conversion for MongoDB (no native DateOnly support)
         modelBuilder.Entity<Transaction>()
@@ -126,6 +130,8 @@ public class MoneyRecordDbContext : DbContext
             modelBuilder.Entity<TransactionReversal>().Property(r => r.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<CommissionEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<IdempotencyKey>().Property(k => k.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<Notification>().Property(n => n.Id).HasValueGenerator((_, _) => generator);
+            modelBuilder.Entity<FcmToken>().Property(f => f.Id).HasValueGenerator((_, _) => generator);
         }
 
         base.OnModelCreating(modelBuilder);

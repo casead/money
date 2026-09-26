@@ -44,7 +44,10 @@ public sealed record DashboardResponse(
     long TodayCashOutTotal,
     int TodayTxnCount,
     long? TodayGrossProfit,
-    IReadOnlyList<string> LowBalanceWarnings);
+    IReadOnlyList<string> LowBalanceWarnings,
+    long TotalReceivableCredits,
+    long TotalPayableCredits,
+    int PendingCreditCount);
 
 public sealed class GetDashboardQueryHandler
     : IRequestHandler<GetDashboardQuery, Result<DashboardResponse>>
@@ -122,6 +125,17 @@ public sealed class GetDashboardQueryHandler
         foreach (var a in accountViews.Where(a => a.CurrentFloatBalance < floatThreshold))
             warnings.Add($"{a.ProviderCode} float လက်ကျန် {a.CurrentFloatBalance:N0} Ks သည် သတိပေးချက်အနိမ့် ({floatThreshold:N0} Ks) အောက် ရောက်နေပါသည်။");
 
+        var creditTxns = _currentUser.ShopId is null
+            ? new List<Transaction>()
+            : await _db.Transactions.AsNoTracking()
+                .Where(t => t.ShopId == _currentUser.ShopId && t.IsCredit
+                            && (t.CreditStatus == CreditStatus.Pending || t.CreditStatus == CreditStatus.Confirmed))
+                .ToListAsync(ct);
+
+        var totalReceivable = creditTxns.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount);
+        var totalPayable = creditTxns.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount);
+        var pendingCreditCount = creditTxns.Count;
+
         return Result<DashboardResponse>.Success(new DashboardResponse(
             date,
             cashBalance,
@@ -132,7 +146,10 @@ public sealed class GetDashboardQueryHandler
             cashOutTotal,
             dayTxnCount,
             dayGross,
-            warnings));
+            warnings,
+            totalReceivable,
+            totalPayable,
+            pendingCreditCount));
     }
 }
 
