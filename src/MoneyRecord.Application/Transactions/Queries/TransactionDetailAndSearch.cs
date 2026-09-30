@@ -151,18 +151,20 @@ public sealed class SearchTransactionsQueryHandler
     {
         var term = request.Term.Trim();
 
-        // txnNo exact / phone contains / name contains / amount exact — ≤50 rows.
+        // txnNo exact / phone prefix / name contains / amount exact — ≤50 rows.
         var amountMatch = long.TryParse(term, out var amt);
         var phonePrefix = MyanmarPhonePrefix(term);
 
         // Tenant scope (M11).
+        // Phone-like terms take the index-only path (TxnNo UQ / phone-prefix / amount indexes);
+        // name Contains is skipped there so every OR branch can use an index at scale.
+        // (Unlike customer search, txn search trades numeric-term name matches for indexed branches.)
         var query = _db.Transactions.AsNoTracking()
             .Where(t => t.ShopId == _currentUser.ShopId);
         query = phonePrefix is not null
             ? query.Where(t =>
                 t.TxnNo == term ||
                 (t.CustomerPhoneSnapshot != null && t.CustomerPhoneSnapshot.StartsWith(phonePrefix)) ||
-                (t.CustomerNameSnapshot != null && t.CustomerNameSnapshot.Contains(term)) ||
                 (amountMatch && t.Amount == amt))
             : query.Where(t =>
                 t.TxnNo == term ||

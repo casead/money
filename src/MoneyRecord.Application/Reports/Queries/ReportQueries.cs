@@ -102,9 +102,12 @@ public sealed class GetDashboardQueryHandler
             a.CurrentFloatBalance
         }).ToList();
 
-        // Day aggregates (netted: only COMPLETED rows) — load into memory for MongoDB compat.
+        // Day aggregates (netted: only COMPLETED rows) — server-side projection of the
+        // four fields used below; grouping/sums stay client-side (Mongo provider GroupBy limits).
         var nettedDay = ReportNetting.Netted(_db, date, date, _currentUser.ShopId);
-        var dayRows = await nettedDay.ToListAsync(ct);
+        var dayRows = await nettedDay
+            .Select(t => new { t.Type, t.Amount, t.FeeAmount, t.CommissionAmount })
+            .ToListAsync(ct);
         var cashInTotal = dayRows.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount);
         var cashOutTotal = dayRows.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount);
         var dayTxnCount = dayRows.Count;
@@ -125,16 +128,17 @@ public sealed class GetDashboardQueryHandler
         foreach (var a in accountViews.Where(a => a.CurrentFloatBalance < floatThreshold))
             warnings.Add($"{a.ProviderCode} float လက်ကျန် {a.CurrentFloatBalance:N0} Ks သည် သတိပေးချက်အနိမ့် ({floatThreshold:N0} Ks) အောက် ရောက်နေပါသည်။");
 
-        var creditTxns = _currentUser.ShopId is null
-            ? new List<Transaction>()
+        var creditRows = _currentUser.ShopId is null
+            ? []
             : await _db.Transactions.AsNoTracking()
                 .Where(t => t.ShopId == _currentUser.ShopId && t.IsCredit
                             && (t.CreditStatus == CreditStatus.Pending || t.CreditStatus == CreditStatus.Confirmed))
+                .Select(t => new { t.Type, t.Amount })
                 .ToListAsync(ct);
 
-        var totalReceivable = creditTxns.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount);
-        var totalPayable = creditTxns.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount);
-        var pendingCreditCount = creditTxns.Count;
+        var totalReceivable = creditRows.Where(t => t.Type == TransactionType.CashIn).Sum(t => t.Amount);
+        var totalPayable = creditRows.Where(t => t.Type == TransactionType.CashOut).Sum(t => t.Amount);
+        var pendingCreditCount = creditRows.Count;
 
         return Result<DashboardResponse>.Success(new DashboardResponse(
             date,
@@ -209,9 +213,14 @@ public sealed class GetDailyReportQueryHandler
         var date = request.Date ?? _clock.TodayYangon;
         var shopId = _currentUser.ShopId;
 
-        // Load ALL transactions for the date+shop into memory (MongoDB compat).
+        // Day's transactions for the shop — server-side projection of the six fields used
+        // below (incl. Status so CancellationCount still counts non-Completed rows).
         var allTxns = await _db.Transactions.AsNoTracking()
             .Where(t => t.ShopId == shopId && t.BusinessDate == date)
+            .Select(t => new
+            {
+                t.Type, t.Status, t.Amount, t.FeeAmount, t.CommissionAmount, t.WalletProviderId
+            })
             .ToListAsync(ct);
 
         var allRows = allTxns.Where(t => t.Status == TransactionStatus.Completed).ToList();
@@ -316,10 +325,15 @@ public sealed class GetMonthlyReportQueryHandler
         var to = from.AddMonths(1).AddDays(-1);
         var shopId = _currentUser.ShopId;
 
-        // Load ALL transactions for the month+shop into memory (MongoDB compat).
+        // Month's transactions for the shop — server-side projection of the six fields used
+        // below (transfer ≈20x smaller than full entities at month volumes).
         var allTxns = await _db.Transactions.AsNoTracking()
             .Where(t => t.ShopId == shopId
                         && t.BusinessDate >= from && t.BusinessDate <= to)
+            .Select(t => new
+            {
+                t.Type, t.Status, t.Amount, t.FeeAmount, t.CommissionAmount, t.WalletProviderId
+            })
             .ToListAsync(ct);
 
         var allRows = allTxns.Where(t => t.Status == TransactionStatus.Completed).ToList();
@@ -425,8 +439,10 @@ public sealed class GetProfitReportQueryHandler
         var shopId = _currentUser.ShopId;
         var netted = ReportNetting.Netted(_db, from, to, shopId);
 
-        // Load full entities into memory for MongoDB compatibility.
-        var allTxns = await netted.ToListAsync(ct);
+        // Server-side projection of the five fields used by the dimension grouping.
+        var allTxns = await netted
+            .Select(t => new { t.Type, t.BusinessDate, t.FeeAmount, t.CommissionAmount, t.WalletProviderId })
+            .ToListAsync(ct);
 
         var providerIds = allTxns.Select(t => t.WalletProviderId).Distinct().ToList();
         var providers = providerIds.Count > 0
