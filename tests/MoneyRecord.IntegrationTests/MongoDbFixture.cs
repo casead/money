@@ -14,13 +14,17 @@ namespace MoneyRecord.IntegrationTests;
 /// <summary>
 /// Boots the REAL Application+Infrastructure stacks against a dedicated MongoDB
 /// test database (created from scratch per run).
-/// Uses the MongoDB Atlas connection string from env MONEYRECORD_IT_MONGO or the dev cluster.
+/// Uses the MongoDB Atlas admin connection string from env MONEYRECORD_IT_MONGO
+/// (user/machine environment variable — credentials must never be committed).
 /// </summary>
 public sealed class MongoDbFixture : IAsyncLifetime
 {
     private static readonly string AdminConnectionString =
         Environment.GetEnvironmentVariable("MONEYRECORD_IT_MONGO")
-        ?? "mongodb+srv://agent_note:Aung2003%40%24@cluster0.6k7hxvp.mongodb.net/?appName=Cluster0";
+        ?? throw new InvalidOperationException(
+            "MONEYRECORD_IT_MONGO is not set. Set it as an environment variable " +
+            "(e.g. [Environment]::SetEnvironmentVariable(\"MONEYRECORD_IT_MONGO\", \"<atlas-uri>\", \"User\"). " +
+            "Do NOT commit connection strings.");
 
     public string DbName { get; } = $"mr_it_{Guid.NewGuid():N}"[..17];
 
@@ -117,6 +121,12 @@ public sealed class MongoDbFixture : IAsyncLifetime
                 new AppSetting(10, "feePercentCashOut", "0", "percent", false, clock));
             await db.SaveChangesAsync();
         }
+
+        // AFTER seeding: prod-equivalent indexes + value-generator counter sync —
+        // tests must run against the same index/counter state the API creates at
+        // startup (counters must see the fixed seed ids to avoid E11000 collisions).
+        var mongo = scope.ServiceProvider.GetRequiredService<IMongoDatabase>();
+        await MongoIndexInitializer.InitializeAsync(mongo);
     }
 
     public IServiceScope CreateScope() => _provider!.CreateScope();

@@ -16,7 +16,9 @@ byte[] hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, 100_000, HashAlgorithmNa
 var stored = $"pbkdf2-sha512$100000${Convert.ToBase64String(salt)}${Convert.ToBase64String(hash)}";
 
 var cs = Environment.GetEnvironmentVariable("MONEYRECORD_IT_ADMIN")
-    ?? "Host=aws-0-ap-northeast-1.pooler.supabase.com;Port=5432;Database=postgres;Username=postgres.aoipgqgjbaaoktjrlncq;Password=erBK8sA0s8WxfF5T;SSL Mode=Require";
+    ?? throw new InvalidOperationException(
+        "MONEYRECORD_IT_ADMIN is not set. Set the Npgsql connection string as an environment " +
+        "variable (credentials must never be committed).");
 await using var conn = new NpgsqlConnection(cs);
 await conn.OpenAsync();
 
