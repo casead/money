@@ -1,0 +1,23 @@
+# Build artifacts — restore/publish regenerate these inside the image
+**/bin/
+**/obj/
+.nuget-packages/
+
+# VCS / IDE
+.git/
+.vs/
+.idea/
+*.user
+.vscode/
+
+# Not needed for API publish (Dockerfile builds MoneyRecord.API only)
+tests/
+tools/
+MoneyRecord.sln
+
+# Deploy/docs config — not part of the app binary
+.dockerignore
+Dockerfile
+render.yaml
+*.md
+.gitignore
