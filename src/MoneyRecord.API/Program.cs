@@ -2,6 +2,8 @@ using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -102,6 +104,27 @@ var host = Host.CreateDefaultBuilder(args)
             services.AddRateLimiter(options =>
             {
                 options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+                options.OnRejected = async (ctx, token) =>
+                {
+                    var response = ctx.HttpContext.Response;
+                    response.StatusCode = StatusCodes.Status429TooManyRequests;
+                    var problem = new ProblemDetails
+                    {
+                        Status = StatusCodes.Status429TooManyRequests,
+                        Title = "Too many requests",
+                        Type = "https://api.moneyrecord.mm/errors/too_many_requests",
+                    };
+                    problem.Extensions["errorCode"] = "TOO_MANY_REQUESTS";
+                    if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+                    {
+                        problem.Extensions["retryAfter"] = retryAfter.ToString();
+                    }
+                    await response.WriteAsJsonAsync(
+                        problem,
+                        options: null,
+                        contentType: "application/problem+json",
+                        cancellationToken: token);
+                };
                 options.AddPolicy("auth-login", context =>
                     RateLimitPartition.GetFixedWindowLimiter(
                         partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
