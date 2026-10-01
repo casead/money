@@ -120,6 +120,7 @@ public class MoneyRecordDbContext : DbContext
             modelBuilder.Entity<Customer>().Property(c => c.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<WalletProvider>().Property(wp => wp.Id).HasValueGenerator((_, _) => intGenerator);
             modelBuilder.Entity<AppSetting>().Property(a => a.Id).HasValueGenerator((_, _) => intGenerator);
+            modelBuilder.Entity<FeeRule>().Property(r => r.Id).HasValueGenerator((_, _) => intGenerator);
             modelBuilder.Entity<WalletAccount>().Property(w => w.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<CashLedgerEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);
             modelBuilder.Entity<WalletLedgerEntry>().Property(e => e.Id).HasValueGenerator((_, _) => generator);

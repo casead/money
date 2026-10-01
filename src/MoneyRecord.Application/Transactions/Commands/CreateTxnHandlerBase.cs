@@ -78,8 +78,31 @@ public abstract class CreateTxnHandlerBase<TCommand>
             return Result<TxnReceiptResponse>.Success(replayed with { IsReplay = true });
         }
 
+        // ---- Authoritative DB replay: when a prior attempt persisted the txn but
+        //      died before CompleteAsync (e.g. transient retry after SaveChanges),
+        //      the lease has no response yet — re-executing would double-write.
+        //      UQ_Transactions_IdempotencyKey is the backstop; return the winner's
+        //      receipt instead (IsReplay=true), same as the lease path above. ----
+        var priorTxn = await _db.Transactions.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.IdempotencyKey == request.IdempotencyKey, ct);
+        if (priorTxn is not null)
+        {
+            var priorAccount = await _db.WalletAccounts.AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == priorTxn.WalletAccountId, ct);
+            var priorCash = await _db.PhysicalCashAccounts.AsNoTracking()
+                .FirstOrDefaultAsync(c => c.Id == (int)priorTxn.ShopId, ct);
+            return Result<TxnReceiptResponse>.Success(BuildReceipt(priorTxn,
+                priorCash?.CurrentCashBalance ?? 0,
+                priorAccount?.CurrentFloatBalance ?? priorTxn.Amount,
+                duplicateWarning: false, isAdmin, isReplay: true));
+        }
+
         // ---- Resolve target account (+provider) ----
-        var account = await _db.WalletAccounts
+        // AsNoTracking: `account` is read-only here (immutable fields + Id for the
+        // wallet lock). Tracking it would poison EF's identity map — LockAndTrack's
+        // post-lock FirstAsync would then hand back this PRE-LOCK instance and
+        // ApplyAdjustment would build on a stale float base (lost update).
+        var account = await _db.WalletAccounts.AsNoTracking()
             .FirstOrDefaultAsync(a => a.Id == request.WalletAccountId && !a.IsDeleted, ct);
         if (account is null || !account.IsActive)
             return Result<TxnReceiptResponse>.Failure(ErrorCodes.NotFound,
@@ -124,308 +147,341 @@ public abstract class CreateTxnHandlerBase<TCommand>
         long floatBefore, cashBefore;
         WalletAccount lockedWallet;
         PhysicalCashAccount lockedCash;
+        LockedCashBalance? cashLease = null;
+        LockedWalletBalance? walletLease = null;
 
-        lockedCash = await LockAndTrackCashAsync(ct);
-        cashBefore = lockedCash.CurrentCashBalance;
-        lockedWallet = await LockAndTrackWalletAsync(account.Id, ct);
-        floatBefore = lockedWallet.CurrentFloatBalance;
-
-        // ---- Fee resolution (M9, BR-012/013): auto-calc from effective-dated rule;
-        //      Any user (Admin/Staff) may override with manual amount. Snapshot
-        //      stored on the txn row so later rule changes never rewrite history. ----
-        var feeOverridden = request.FeeAmountOverride is not null;
-
-        long feeAmount;
-        int? appliedRuleId;
-        if (feeOverridden)
+        try
         {
-            feeAmount = request.FeeAmountOverride!.Value;
-            appliedRuleId = null; // manual override — no rule applied
-        }
-        else
-        {
-            var resolution = await _feeCalculator.CalculateAsync(
-                Type, request.Amount, ct);
-            feeAmount = resolution.FeeAmount;
-            appliedRuleId = resolution.AppliedRuleId;
-        }
+            (lockedCash, cashLease) = await LockAndTrackCashAsync(ct);
+            cashBefore = lockedCash.CurrentCashBalance;
+            (lockedWallet, walletLease) = await LockAndTrackWalletAsync(account.Id, ct);
+            floatBefore = lockedWallet.CurrentFloatBalance;
 
-        var feeVia = request.ResolveFeePaidVia();
+            // ---- Fee resolution (M9, BR-012/013): auto-calc from effective-dated rule;
+            //      Any user (Admin/Staff) may override with manual amount. Snapshot
+            //      stored on the txn row so later rule changes never rewrite history. ----
+            var feeOverridden = request.FeeAmountOverride is not null;
 
-        // ---- Sufficiency guards (BR-032/033/007 hard floor) ----
-        // Cash In:  wallet must have enough float for the full Amount.
-        // Cash Out: shop must have enough cash to pay the customer.
-        //           When fee is deducted from amount, customer receives (Amount − Fee).
-        // Credit exception: ပေးရန်ရှိ (payable, creditMethod='cash') moves cash ↑ ONLY at
-        // creation — wallet is untouched now (it moves at settlement), so a 0-balance
-        // shop can still record the obligation. ရရန်ရှိ (wallet ↓ now) and non-credit
-        // CashIn keep the hard float floor (negative balance is never created silently).
-        long cashNeeded = request.Amount;
-        if (!cashIn && request.FeeDeductedFromAmount && feeAmount > 0)
-            cashNeeded = request.Amount - feeAmount;
-        var creditMethod = request.IsCredit
-            ? request.CreditPaymentMethod?.Trim().ToLowerInvariant() ?? "cash"
-            : null;
-        var isCreditPayable = request.IsCredit && creditMethod != "ewallet";
-        if (cashIn && !isCreditPayable && request.Amount > floatBefore)
-            throw new InsufficientFloatException(floatBefore);
-        if (!cashIn && cashNeeded > cashBefore)
-            throw new InsufficientCashException(cashBefore);
-
-        // ---- TxnNo from native SEQUENCE (race-free) ----
-        var seq = await _txnNumbers.NextAsync(ct);
-        var txnNo = $"TXN-{_clock.TodayYangon.Year}-{seq:D5}";
-
-        // ---- Insert immutable txn row ----
-        var txn = Transaction.Complete(
-            txnNo, Type, request.Amount, feeAmount, feeOverridden,
-            appliedRuleId, feeVia, request.FeeDeductedFromAmount,
-            customerId, request.CustomerName, phone,
-            account.WalletProviderId, account.Id, request.IdempotencyKey,
-            request.Note, referenceNo: null, actorId, _clock,
-            shopId: account.ShopId, isCredit: request.IsCredit,
-            creditPaymentMethod: request.IsCredit
-                ? request.CreditPaymentMethod?.Trim().ToLowerInvariant() ?? "cash"
-                : "cash");
-        _db.Transactions.Add(txn);
-
-        // Persist now: materializes txn.Id (ledger FKs) and the idempotency
-        // reservation inserted by ReserveAsync — all inside the T1 transaction.
-        await _db.SaveChangesAsync(ct);
-
-        // ---- Credit transactions: ONE side updates immediately ----
-        // ပေးရန်ရှိ (creditMethod='cash')   → cash updates now,  wallet settles later
-        // ရရန်ရှိ (creditMethod='ewallet') → wallet updates now, cash settles later
-        if (request.IsCredit)
-        {
-            if (creditMethod == "cash")
+            long feeAmount;
+            int? appliedRuleId;
+            if (feeOverridden)
             {
-                // ပေးရန်ရှိ: physical cash already received → cash balance now
-                var creditCashDirection = cashIn ? LedgerDirection.Increase : LedgerDirection.Decrease;
-                lockedCash.ApplyAdjustment(creditCashDirection, request.Amount, actorId, _clock);
-                _db.CashLedgerEntries.Add(CashLedgerEntry.ForTransactionCore(
-                    txn.Id, creditCashDirection, request.Amount,
-                    lockedCash.CurrentCashBalance, actorId, txn.OccurredAtUtc));
+                feeAmount = request.FeeAmountOverride!.Value;
+                appliedRuleId = null; // manual override — no rule applied
             }
             else
             {
-                // ရရန်ရှိ: e-wallet already sent → wallet balance now
-                var creditWalletDirection = cashIn ? LedgerDirection.Decrease : LedgerDirection.Increase;
-                lockedWallet.ApplyAdjustment(creditWalletDirection, request.Amount, actorId, _clock);
-                _db.WalletLedgerEntries.Add(WalletLedgerEntry.ForTransactionCore(
-                    account.Id, txn.Id, creditWalletDirection, request.Amount,
-                    lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
+                var resolution = await _feeCalculator.CalculateAsync(
+                    Type, request.Amount, ct);
+                feeAmount = resolution.FeeAmount;
+                appliedRuleId = resolution.AppliedRuleId;
             }
 
+            var feeVia = request.ResolveFeePaidVia();
+
+            // ---- Sufficiency guards (BR-032/033/007 hard floor) ----
+            // Cash In:  wallet must have enough float for the full Amount.
+            // Cash Out: shop must have enough cash to pay the customer.
+            //           When fee is deducted from amount, customer receives (Amount − Fee).
+            // Credit exception: ပေးရန်ရှိ (payable, creditMethod='cash') moves cash ↑ ONLY at
+            // creation — wallet is untouched now (it moves at settlement), so a 0-balance
+            // shop can still record the obligation. ရရန်ရှိ (wallet ↓ now) and non-credit
+            // CashIn keep the hard float floor (negative balance is never created silently).
+            long cashNeeded = request.Amount;
+            if (!cashIn && request.FeeDeductedFromAmount && feeAmount > 0)
+                cashNeeded = request.Amount - feeAmount;
+            var creditMethod = request.IsCredit
+                ? request.CreditPaymentMethod?.Trim().ToLowerInvariant() ?? "cash"
+                : null;
+            var isCreditPayable = request.IsCredit && creditMethod != "ewallet";
+            if (cashIn && !isCreditPayable && request.Amount > floatBefore)
+                throw new InsufficientFloatException(floatBefore);
+            if (!cashIn && cashNeeded > cashBefore)
+                throw new InsufficientCashException(cashBefore);
+
+            // ---- TxnNo from native SEQUENCE (race-free) ----
+            var seq = await _txnNumbers.NextAsync(ct);
+            var txnNo = $"TXN-{_clock.TodayYangon.Year}-{seq:D5}";
+
+            // ---- Insert immutable txn row ----
+            var txn = Transaction.Complete(
+                txnNo, Type, request.Amount, feeAmount, feeOverridden,
+                appliedRuleId, feeVia, request.FeeDeductedFromAmount,
+                customerId, request.CustomerName, phone,
+                account.WalletProviderId, account.Id, request.IdempotencyKey,
+                request.Note, referenceNo: null, actorId, _clock,
+                shopId: account.ShopId, isCredit: request.IsCredit,
+                creditPaymentMethod: request.IsCredit
+                    ? request.CreditPaymentMethod?.Trim().ToLowerInvariant() ?? "cash"
+                    : "cash");
+            _db.Transactions.Add(txn);
+
+            // Persist now: materializes txn.Id (ledger FKs) and the idempotency
+            // reservation inserted by ReserveAsync — all inside the T1 transaction.
             await _db.SaveChangesAsync(ct);
 
-            var creditReceipt = new TxnReceiptResponse(
-                txn.TxnNo,
-                txn.Status.ToString(),
-                txn.Amount,
-                txn.FeeAmount,
-                txn.FeePaidVia == FeePaidVia.WalletFloat ? "wallet" : "cash",
-                NetAmount: txn.NetAmount ?? txn.Amount,
-                CommissionAmount: 0,
-                ShowProfitFields: isAdmin,
-                ProfitAmount: 0,
-                new BalancesAfter(lockedCash.CurrentCashBalance, lockedWallet.CurrentFloatBalance),
-                ReceiptUrl: $"/transactions/{txn.TxnNo}/receipt",
-                DuplicateWarning: false,
-                txn.OccurredAtUtc,
-                txn.BusinessDate,
-                IsReplay: false,
-                IsCredit: true);
+            // ---- Credit transactions: ONE side updates immediately ----
+            // ပေးရန်ရှိ (creditMethod='cash')   → cash updates now,  wallet settles later
+            // ရရန်ရှိ (creditMethod='ewallet') → wallet updates now, cash settles later
+            if (request.IsCredit)
+            {
+                if (creditMethod == "cash")
+                {
+                    // ပေးရန်ရှိ: physical cash already received → cash balance now
+                    var creditCashDirection = cashIn ? LedgerDirection.Increase : LedgerDirection.Decrease;
+                    lockedCash.ApplyAdjustment(creditCashDirection, request.Amount, actorId, _clock);
+                    _db.CashLedgerEntries.Add(CashLedgerEntry.ForTransactionCore(
+                        txn.Id, creditCashDirection, request.Amount,
+                        lockedCash.CurrentCashBalance, actorId, txn.OccurredAtUtc));
+                }
+                else
+                {
+                    // ရရန်ရှိ: e-wallet already sent → wallet balance now
+                    var creditWalletDirection = cashIn ? LedgerDirection.Decrease : LedgerDirection.Increase;
+                    lockedWallet.ApplyAdjustment(creditWalletDirection, request.Amount, actorId, _clock);
+                    _db.WalletLedgerEntries.Add(WalletLedgerEntry.ForTransactionCore(
+                        account.Id, txn.Id, creditWalletDirection, request.Amount,
+                        lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
+                }
+
+                await _db.SaveChangesAsync(ct);
+
+                var creditReceipt = new TxnReceiptResponse(
+                    txn.TxnNo,
+                    txn.Status.ToString(),
+                    txn.Amount,
+                    txn.FeeAmount,
+                    txn.FeePaidVia == FeePaidVia.WalletFloat ? "wallet" : "cash",
+                    NetAmount: txn.NetAmount ?? txn.Amount,
+                    CommissionAmount: 0,
+                    ShowProfitFields: isAdmin,
+                    ProfitAmount: 0,
+                    new BalancesAfter(lockedCash.CurrentCashBalance, lockedWallet.CurrentFloatBalance),
+                    ReceiptUrl: $"/transactions/{txn.TxnNo}/receipt",
+                    DuplicateWarning: false,
+                    txn.OccurredAtUtc,
+                    txn.BusinessDate,
+                    IsReplay: false,
+                    IsCredit: true);
+
+                await _idempotency.CompleteAsync(
+                    request.IdempotencyKey, JsonSerializer.Serialize(creditReceipt), ct);
+
+                try
+                {
+                    var providerName = walletProvider?.Name ?? "E-Wallet";
+                    var creditType = txn.CreditPaymentMethod == "ewallet" ? "ရရန်ရှိ" : "ပေးရန်ရှိ";
+                    var notiTitle = $"{request.CustomerName ?? "Customer"} - {request.Amount:N0} Ks";
+                    var notiMessage = $"{creditType}: {providerName} အတွက် အကြွေးထည့်ပေးပြီ";
+                    var notiData = JsonSerializer.Serialize(new { txnNo = txn.TxnNo, screen = "credit" });
+
+                    await _notificationService.NotifyAsync(
+                        account.ShopId, null,
+                        NotificationType.CreditCreated,
+                        notiTitle, notiMessage, notiData, ct);
+                }
+                catch { /* best-effort notification */ }
+
+                return Result<TxnReceiptResponse>.Success(creditReceipt);
+            }
+
+            // ---- Dual-ledger writes (BRL §4.C.2 / §4.D.2 + BR-012-ext fee movement) ----
+            // Principal: Cash In → cash +A / wallet −A ; Cash Out → cash −A / wallet +A.
+            // Fee deducted: wallet movement uses NetAmount (Amount - Fee) instead of Amount.
+            // Fee:       ALWAYS lands on the side the customer paid it —
+            //            via Cash → cash +F ; via WalletFloat → wallet +F
+            //            (fee paid from the customer's own mobile wallet).
+            //            When FeeDeductedFromAmount=true, fee is NOT separately added
+            //            to wallet float — it's already deducted from the wallet movement.
+            var cashDirection = cashIn ? LedgerDirection.Increase : LedgerDirection.Decrease;
+            var walletDirection = cashIn ? LedgerDirection.Decrease : LedgerDirection.Increase;
+
+            // Wallet movement:
+            //   Cash Out + FeeDeductedFromAmount → full Amount (shop pays customer cash after deducting fee)
+            //   Cash In  + FeeDeductedFromAmount → net Amount (wallet tops up less fee)
+            //   No deduction                    → full Amount
+            var walletMovementAmount = (cashIn && txn.NetAmount.HasValue)
+                ? txn.NetAmount.Value
+                : request.Amount;
+
+            // Cash movement:
+            //   Cash Out + FeeDeductedFromAmount → net Amount (customer receives less cash)
+            //   Otherwise                        → full Amount
+            var cashMovementAmount = (!cashIn && txn.NetAmount.HasValue)
+                ? txn.NetAmount.Value
+                : request.Amount;
+
+            lockedCash.ApplyAdjustment(cashDirection, cashMovementAmount, actorId, _clock);
+            var cashAfterPrincipal = lockedCash.CurrentCashBalance;
+            lockedWallet.ApplyAdjustment(walletDirection, walletMovementAmount, actorId, _clock);
+            var floatAfterPrincipal = lockedWallet.CurrentFloatBalance;
+
+            if (feeAmount > 0 && feeVia == FeePaidVia.Cash)
+                lockedCash.ApplyAdjustment(LedgerDirection.Increase, feeAmount, actorId, _clock);
+            else if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat
+                     && !request.FeeDeductedFromAmount)
+                lockedWallet.ApplyAdjustment(LedgerDirection.Increase, feeAmount, actorId, _clock);
+
+            var cashEntry = CashLedgerEntry.ForTransactionCore(
+                txn.Id, cashDirection, cashMovementAmount,
+                cashAfterPrincipal, actorId, txn.OccurredAtUtc);
+            _db.CashLedgerEntries.Add(cashEntry);
+
+            if (feeAmount > 0 && feeVia == FeePaidVia.Cash)
+                _db.CashLedgerEntries.Add(CashLedgerEntry.ForTransactionCore(
+                    txn.Id, LedgerDirection.Increase, feeAmount,
+                    lockedCash.CurrentCashBalance, actorId, txn.OccurredAtUtc));
+
+            var walletEntry = WalletLedgerEntry.ForTransactionCore(
+                account.Id, txn.Id, walletDirection, walletMovementAmount,
+                floatAfterPrincipal, actorId, txn.OccurredAtUtc);
+            _db.WalletLedgerEntries.Add(walletEntry);
+
+            if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat
+                && !request.FeeDeductedFromAmount)
+                _db.WalletLedgerEntries.Add(WalletLedgerEntry.ForTransactionCore(
+                    account.Id, txn.Id, LedgerDirection.Increase, feeAmount,
+                    lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
+
+            // ---- Duplicate soft-warning (BR-030, non-blocking hint) ----
+            // DEFERRED: not critical for response; checked after commit.
+            bool duplicateWarning = false;
+
+            // ---- Audit inside the same business txn (non-negotiable #4) ----
+            // DEFERRED: logged after commit to reduce critical path latency.
+
+            // ---- Receipt payload + idempotency completion ----
+            var receipt = BuildReceipt(txn, lockedCash.CurrentCashBalance,
+                lockedWallet.CurrentFloatBalance, duplicateWarning, isAdmin, isReplay: false);
+
+            // Persist balance updates + ledger entries (MongoDB has no wrapping transaction).
+            await _db.SaveChangesAsync(ct);
+
+            if (walletDirection == LedgerDirection.Increase)
+            {
+                await CreditReminderNotifier.TryNotifyAsync(
+                    _db, _notificationService, account.ShopId, account.Id,
+                    lockedWallet.CurrentFloatBalance, ct);
+            }
 
             await _idempotency.CompleteAsync(
-                request.IdempotencyKey, JsonSerializer.Serialize(creditReceipt), ct);
+                request.IdempotencyKey, JsonSerializer.Serialize(receipt), ct);
 
-            try
+            // ---- Deferred non-critical operations (after response ready) ----
+            // Each runs in its own DI scope to avoid using the request-scoped DbContext
+            // after the TransactionBehavior commits and the request scope is disposed.
+            var txnNoCapture = txn.TxnNo;
+            var amountCapture = request.Amount;
+            var feeAmountCapture = feeAmount;
+            var feeViaCapture = feeVia.ToString();
+            var accountNameCapture = account.AccountName;
+            var cashAfterCapture = lockedCash.CurrentCashBalance;
+            var floatAfterCapture = lockedWallet.CurrentFloatBalance;
+            var actionCodeCapture = ActionCode;
+            var typeCapture = Type;
+
+            _ = Task.Run(async () =>
             {
-                var providerName = walletProvider?.Name ?? "E-Wallet";
-                var creditType = txn.CreditPaymentMethod == "ewallet" ? "ရရန်ရှိ" : "ပေးရန်ရှိ";
-                var notiTitle = $"{request.CustomerName ?? "Customer"} - {request.Amount:N0} Ks";
-                var notiMessage = $"{creditType}: {providerName} အတွက် အကြွေးထည့်ပေးပြီ";
-                var notiData = JsonSerializer.Serialize(new { txnNo = txn.TxnNo, screen = "credit" });
-
-                await _notificationService.NotifyAsync(
-                    account.ShopId, null,
-                    NotificationType.CreditCreated,
-                    notiTitle, notiMessage, notiData, ct);
-            }
-            catch { /* best-effort notification */ }
-
-            return Result<TxnReceiptResponse>.Success(creditReceipt);
-        }
-
-        // ---- Dual-ledger writes (BRL §4.C.2 / §4.D.2 + BR-012-ext fee movement) ----
-        // Principal: Cash In → cash +A / wallet −A ; Cash Out → cash −A / wallet +A.
-        // Fee deducted: wallet movement uses NetAmount (Amount - Fee) instead of Amount.
-        // Fee:       ALWAYS lands on the side the customer paid it —
-        //            via Cash → cash +F ; via WalletFloat → wallet +F
-        //            (fee paid from the customer's own mobile wallet).
-        //            When FeeDeductedFromAmount=true, fee is NOT separately added
-        //            to wallet float — it's already deducted from the wallet movement.
-        var cashDirection = cashIn ? LedgerDirection.Increase : LedgerDirection.Decrease;
-        var walletDirection = cashIn ? LedgerDirection.Decrease : LedgerDirection.Increase;
-
-        // Wallet movement:
-        //   Cash Out + FeeDeductedFromAmount → full Amount (shop pays customer cash after deducting fee)
-        //   Cash In  + FeeDeductedFromAmount → net Amount (wallet tops up less fee)
-        //   No deduction                    → full Amount
-        var walletMovementAmount = (cashIn && txn.NetAmount.HasValue)
-            ? txn.NetAmount.Value
-            : request.Amount;
-
-        // Cash movement:
-        //   Cash Out + FeeDeductedFromAmount → net Amount (customer receives less cash)
-        //   Otherwise                        → full Amount
-        var cashMovementAmount = (!cashIn && txn.NetAmount.HasValue)
-            ? txn.NetAmount.Value
-            : request.Amount;
-
-        lockedCash.ApplyAdjustment(cashDirection, cashMovementAmount, actorId, _clock);
-        var cashAfterPrincipal = lockedCash.CurrentCashBalance;
-        lockedWallet.ApplyAdjustment(walletDirection, walletMovementAmount, actorId, _clock);
-        var floatAfterPrincipal = lockedWallet.CurrentFloatBalance;
-
-        if (feeAmount > 0 && feeVia == FeePaidVia.Cash)
-            lockedCash.ApplyAdjustment(LedgerDirection.Increase, feeAmount, actorId, _clock);
-        else if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat
-                 && !request.FeeDeductedFromAmount)
-            lockedWallet.ApplyAdjustment(LedgerDirection.Increase, feeAmount, actorId, _clock);
-
-        var cashEntry = CashLedgerEntry.ForTransactionCore(
-            txn.Id, cashDirection, cashMovementAmount,
-            cashAfterPrincipal, actorId, txn.OccurredAtUtc);
-        _db.CashLedgerEntries.Add(cashEntry);
-
-        if (feeAmount > 0 && feeVia == FeePaidVia.Cash)
-            _db.CashLedgerEntries.Add(CashLedgerEntry.ForTransactionCore(
-                txn.Id, LedgerDirection.Increase, feeAmount,
-                lockedCash.CurrentCashBalance, actorId, txn.OccurredAtUtc));
-
-        var walletEntry = WalletLedgerEntry.ForTransactionCore(
-            account.Id, txn.Id, walletDirection, walletMovementAmount,
-            floatAfterPrincipal, actorId, txn.OccurredAtUtc);
-        _db.WalletLedgerEntries.Add(walletEntry);
-
-        if (feeAmount > 0 && feeVia == FeePaidVia.WalletFloat
-            && !request.FeeDeductedFromAmount)
-            _db.WalletLedgerEntries.Add(WalletLedgerEntry.ForTransactionCore(
-                account.Id, txn.Id, LedgerDirection.Increase, feeAmount,
-                lockedWallet.CurrentFloatBalance, actorId, txn.OccurredAtUtc));
-
-        // ---- Duplicate soft-warning (BR-030, non-blocking hint) ----
-        // DEFERRED: not critical for response; checked after commit.
-        bool duplicateWarning = false;
-
-        // ---- Audit inside the same business txn (non-negotiable #4) ----
-        // DEFERRED: logged after commit to reduce critical path latency.
-
-        // ---- Receipt payload + idempotency completion ----
-        var receipt = BuildReceipt(txn, lockedCash.CurrentCashBalance,
-            lockedWallet.CurrentFloatBalance, duplicateWarning, isAdmin, isReplay: false);
-
-        // Persist balance updates + ledger entries (MongoDB has no wrapping transaction).
-        await _db.SaveChangesAsync(ct);
-
-        if (walletDirection == LedgerDirection.Increase)
-        {
-            await CreditReminderNotifier.TryNotifyAsync(
-                _db, _notificationService, account.ShopId, account.Id,
-                lockedWallet.CurrentFloatBalance, ct);
-        }
-
-        await _idempotency.CompleteAsync(
-            request.IdempotencyKey, JsonSerializer.Serialize(receipt), ct);
-
-        // ---- Deferred non-critical operations (after response ready) ----
-        // Each runs in its own DI scope to avoid using the request-scoped DbContext
-        // after the TransactionBehavior commits and the request scope is disposed.
-        var txnNoCapture = txn.TxnNo;
-        var amountCapture = request.Amount;
-        var feeAmountCapture = feeAmount;
-        var feeViaCapture = feeVia.ToString();
-        var accountNameCapture = account.AccountName;
-        var cashAfterCapture = lockedCash.CurrentCashBalance;
-        var floatAfterCapture = lockedWallet.CurrentFloatBalance;
-        var actionCodeCapture = ActionCode;
-        var typeCapture = Type;
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
-                var clock = scope.ServiceProvider.GetRequiredService<IClock>();
-                var windowStart = clock.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
-                if (phone is not null)
+                try
                 {
-                    await db.Transactions.AsNoTracking()
-                        .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
-                                       t.Amount == amountCapture &&
-                                       t.Type == typeCapture &&
-                                       t.Status == TransactionStatus.Completed &&
-                                       t.OccurredAtUtc >= windowStart);
-                }
-            }
-            catch { /* best-effort */ }
-        });
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
-                await audit.LogAsync(actionCodeCapture, "Transaction", txnNoCapture,
-                    newValue: JsonSerializer.Serialize(new
+                    using var scope = _scopeFactory.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
+                    var clock = scope.ServiceProvider.GetRequiredService<IClock>();
+                    var windowStart = clock.UtcNow.AddMinutes(-TxnRules.DuplicateWarningWindowMinutes);
+                    if (phone is not null)
                     {
-                        txnNo = txnNoCapture,
-                        type = typeCapture.ToString(),
-                        amount = amountCapture,
-                        feeAmount = feeAmountCapture,
-                        feePaidVia = feeViaCapture,
-                        customerPhone = phone is not null ? MyanmarPhone.Mask(phone) : null,
-                        account = accountNameCapture,
-                        balancesAfter = new
+                        await db.Transactions.AsNoTracking()
+                            .AnyAsync(t => t.CustomerPhoneSnapshot == phone &&
+                                           t.Amount == amountCapture &&
+                                           t.Type == typeCapture &&
+                                           t.Status == TransactionStatus.Completed &&
+                                           t.OccurredAtUtc >= windowStart);
+                    }
+                }
+                catch { /* best-effort */ }
+            });
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
+                    await audit.LogAsync(actionCodeCapture, "Transaction", txnNoCapture,
+                        newValue: JsonSerializer.Serialize(new
                         {
-                            cash = cashAfterCapture,
-                            floatBalance = floatAfterCapture
-                        }
-                    }));
-            }
-            catch { /* best-effort */ }
-        });
+                            txnNo = txnNoCapture,
+                            type = typeCapture.ToString(),
+                            amount = amountCapture,
+                            feeAmount = feeAmountCapture,
+                            feePaidVia = feeViaCapture,
+                            customerPhone = phone is not null ? MyanmarPhone.Mask(phone) : null,
+                            account = accountNameCapture,
+                            balancesAfter = new
+                            {
+                                cash = cashAfterCapture,
+                                floatBalance = floatAfterCapture
+                            }
+                        }));
+                }
+                catch { /* best-effort */ }
+            });
 
-        return Result<TxnReceiptResponse>.Success(receipt);
-    }
-
-    private async Task<WalletAccount> LockAndTrackWalletAsync(long accountId, CancellationToken ct)
-    {
-        var locked = await _locker.LockWalletAccountAsync(accountId, ct);
-
-        // Locker uses AsNoTracking, so no double-tracking. Do NOT clear here
-        // because it would detach the cash entity tracked by LockAndTrackCashAsync.
-        var tracked = await _db.WalletAccounts.FirstAsync(a => a.Id == accountId, ct);
-        return tracked;
-    }
-
-    private async Task<PhysicalCashAccount> LockAndTrackCashAsync(CancellationToken ct)
-    {
-        var locked = await _locker.LockPhysicalCashAsync(ct);
-
-        // Locker uses AsNoTracking, so no double-tracking. Do NOT clear here
-        // because LockAndTrackWalletAsync would detach the cash entity.
-        var tracked = await _db.PhysicalCashAccounts
-            .FirstOrDefaultAsync(c => c.Id == locked.Id, ct);
-        if (tracked is null)
-        {
-            tracked = PhysicalCashAccount.CreateForShop(locked.Id, 0, _clock);
-            _db.PhysicalCashAccounts.Add(tracked);
+            return Result<TxnReceiptResponse>.Success(receipt);
         }
-        return tracked;
+        finally
+        {
+            // Balance mutexes are held across SaveChanges (line ~353) — release
+            // on every exit path, including exceptions and behavior-level retries.
+            if (cashLease is not null) await cashLease.DisposeAsync();
+            if (walletLease is not null) await walletLease.DisposeAsync();
+        }
+    }
+
+    private async Task<(WalletAccount Tracked, LockedWalletBalance Lease)>
+        LockAndTrackWalletAsync(long accountId, CancellationToken ct)
+    {
+        var lease = await _locker.LockWalletAccountAsync(accountId, ct);
+        try
+        {
+            // Locker uses AsNoTracking, so no double-tracking. Do NOT clear here
+            // because it would detach the cash entity tracked by LockAndTrackCashAsync.
+            // The handler also loads `account` AsNoTracking BEFORE the locks, so the
+            // identity map holds no stale copy — this FirstAsync materializes the
+            // row FRESH under the mutex (ApplyAdjustment on a stale base would
+            // silently overwrite concurrent float updates; the Mongo EF provider
+            // cannot ReloadAsync either, so prevention is the fix).
+            var tracked = await _db.WalletAccounts.FirstAsync(a => a.Id == accountId, ct);
+            return (tracked, lease);
+        }
+        catch
+        {
+            await lease.DisposeAsync();
+            throw;
+        }
+    }
+
+    private async Task<(PhysicalCashAccount Tracked, LockedCashBalance Lease)>
+        LockAndTrackCashAsync(CancellationToken ct)
+    {
+        var lease = await _locker.LockPhysicalCashAsync(ct);
+        try
+        {
+            // Locker uses AsNoTracking, so no double-tracking. Do NOT clear here
+            // because LockAndTrackWalletAsync would detach the cash entity.
+            var tracked = await _db.PhysicalCashAccounts
+                .FirstOrDefaultAsync(c => c.Id == lease.Id, ct);
+            if (tracked is null)
+            {
+                tracked = PhysicalCashAccount.CreateForShop(lease.Id, 0, _clock);
+                _db.PhysicalCashAccounts.Add(tracked);
+            }
+            return (tracked, lease);
+        }
+        catch
+        {
+            await lease.DisposeAsync();
+            throw;
+        }
     }
 
     private static TxnReceiptResponse BuildReceipt(Transaction txn, long cashAfter,

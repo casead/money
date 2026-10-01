@@ -85,7 +85,7 @@ public sealed class SettleCreditHandler : IRequestHandler<SettleCreditCommand, R
         var effectiveMethod = isPayable ? "ewallet" : "cash";
         var cashIn = txn.Type == TransactionType.CashIn;
 
-        var cash = await _locker.LockPhysicalCashAsync(ct);
+        await using var cash = await _locker.LockPhysicalCashAsync(ct);
         var trackedCash = await _db.PhysicalCashAccounts.FirstOrDefaultAsync(c => c.Id == cash.Id, ct);
 
         WalletAccount? trackedWallet = null;

@@ -84,6 +84,9 @@ public sealed class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior
     private static bool IsTransient(Exception ex) =>
         ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
         ex.Message.Contains("TransientTransactionError", StringComparison.OrdinalIgnoreCase) ||
+        // Mongo write conflict under concurrent load ("Write conflict during plan
+        // execution...") is retryable — without this the burst path 500s (TC-600f).
+        ex.Message.Contains("Write conflict", StringComparison.OrdinalIgnoreCase) ||
         ex.Message.Contains("connection", StringComparison.OrdinalIgnoreCase) ||
         ex.InnerException is not null && IsTransient(ex.InnerException);
 }

@@ -66,15 +66,16 @@ public sealed class ReconciliationService
             .ToListAsync(ct);
         foreach (var account in accounts)
         {
-            var sums = await _db.WalletLedgerEntries.AsNoTracking()
+            // MongoDB EF cannot translate GroupBy over an enum key (g.Key surfaces as
+            // "Property 'LedgerDirection Key' is not defined for type CashLedgerEntry")
+            // — sum client-side, same pattern as the cash path in BalanceQueries.
+            var rows = await _db.WalletLedgerEntries.AsNoTracking()
                 .Where(e => e.WalletAccountId == account.Id)
-                .GroupBy(e => e.Direction)
-                .Select(g => new { g.Key, Total = g.Sum(e => e.Amount) })
+                .Select(e => new { e.Direction, e.Amount })
                 .ToListAsync(ct);
-            var grouped = sums.Select(s => (Key: s.Key, Total: s.Total)).ToList();
-            var ledgerSum = IntegrityCheck.SignedSum(
-                Sum(grouped, LedgerDirection.Increase),
-                Sum(grouped, LedgerDirection.Decrease));
+            var inc = rows.Where(r => r.Direction == LedgerDirection.Increase).Sum(r => r.Amount);
+            var dec = rows.Where(r => r.Direction == LedgerDirection.Decrease).Sum(r => r.Amount);
+            var ledgerSum = IntegrityCheck.SignedSum(inc, dec);
             if (IntegrityCheck.Flag(account.CurrentFloatBalance, ledgerSum) is not null)
                 drifts.Add(new LedgerDriftReport($"wallet:{account.Id} ({account.AccountName})",
                     account.CurrentFloatBalance, ledgerSum,
@@ -106,20 +107,17 @@ public sealed class ReconciliationService
             .Select(u => u.Id)
             .ToListAsync(ct);
 
-        var sums = await _db.CashLedgerEntries.AsNoTracking()
+        // Enum-keyed GroupBy is not translatable by the MongoDB EF provider — sum
+        // client-side over the (small) shop-scoped projection instead.
+        var rows = await _db.CashLedgerEntries.AsNoTracking()
             .Where(e => shopUserIds.Contains(e.CreatedByUserId))
-            .GroupBy(e => e.Direction)
-            .Select(g => new { g.Key, Total = g.Sum(e => e.Amount) })
+            .Select(e => new { e.Direction, e.Amount })
             .ToListAsync(ct);
-        var grouped = sums.Select(s => (Key: s.Key, Total: s.Total)).ToList();
-        var sum = IntegrityCheck.SignedSum(Sum(grouped, LedgerDirection.Increase),
-            Sum(grouped, LedgerDirection.Decrease));
+        var inc = rows.Where(r => r.Direction == LedgerDirection.Increase).Sum(r => r.Amount);
+        var dec = rows.Where(r => r.Direction == LedgerDirection.Decrease).Sum(r => r.Amount);
+        var sum = IntegrityCheck.SignedSum(inc, dec);
         return (sum, IntegrityCheck.Flag(cash?.CurrentCashBalance ?? 0, sum));
     }
-
-    private static long Sum(IEnumerable<(LedgerDirection Key, long Total)> source,
-        LedgerDirection direction)
-        => source.Where(s => s.Key == direction).Select(s => s.Total).FirstOrDefault();
 
     /// <summary>
     /// Chain rule per scope: first entry's BalanceAfter must equal its signed amount;

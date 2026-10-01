@@ -58,7 +58,8 @@ public class ReportsIntegrationTests : IAsyncLifetime
         CustomerName = "U Report",
         CustomerPhone = "09771112223",
         WalletAccountId = _accountId,
-        Amount = amount
+        Amount = amount,
+        FeePaidVia = "cash"
     };
 
     private CreateCashOutCommand Out(long amount) => new()
@@ -67,7 +68,8 @@ public class ReportsIntegrationTests : IAsyncLifetime
         CustomerName = "U Report",
         CustomerPhone = "09771112223",
         WalletAccountId = _accountId,
-        Amount = amount
+        Amount = amount,
+        FeePaidVia = "cash"
     };
 
     // ---- TC-1000a: dashboard totals == same-day filtered txn list ----

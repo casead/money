@@ -51,7 +51,9 @@ public static class DependencyInjection
         services.AddScoped<MoneyRecord.Application.Customers.Common.ICustomerTransactionStats,
             MoneyRecord.Infrastructure.Persistence.CustomerTransactionStatsService>();
 
-        // MongoDB atomic balance operations (replaces PG FOR UPDATE locks)
+        // Balance-row mutex (Mongo port of PG FOR UPDATE locks, BR-035):
+        // registry is process-wide (singleton), locker is request-scoped.
+        services.AddSingleton<BalanceLockRegistry>();
         services.AddScoped<MoneyRecord.Application.Common.Interfaces.IBalanceLocker,
             MongoBalanceLocker>();
         services.AddScoped<MoneyRecord.Application.Common.Interfaces.ITxnNumberGenerator,

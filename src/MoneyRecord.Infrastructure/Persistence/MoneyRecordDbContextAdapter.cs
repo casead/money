@@ -99,23 +99,22 @@ public sealed class AuditLogger : IAuditLogger
         _clock = clock;
     }
 
-    public Task LogAsync(string actionCode, string entityType, string entityId,
+    public async Task LogAsync(string actionCode, string entityType, string entityId,
         string? oldValue = null, string? newValue = null,
         CancellationToken ct = default)
     {
-        // SOFT-DISABLED: audit logging paused to save DB space.
-        // To re-enable, remove this line and uncomment the block below.
-        return Task.CompletedTask;
-
-        // _db.AuditLogs.Add(AuditLog.Create(
-        //     actionCode, entityType, entityId,
-        //     oldValuesJson: oldValue, newValuesJson: newValue,
-        //     ipAddress: _requestContext.IpAddress,
-        //     deviceInfo: _requestContext.DeviceInfo,
-        //     actorUserId: _currentUser?.UserId,
-        //     clock: _clock,
-        //     shopId: _currentUser?.ShopId));
-        // return Task.CompletedTask;
+        // Audit trail is a hard requirement (BC-01 / BRL T2-T3, SET-002, USR-*).
+        // Persist immediately: several handlers log AFTER their own SaveChangesAsync
+        // (cancel/reverse), so a plain Add() would never reach the database.
+        _db.AuditLogs.Add(AuditLog.Create(
+            actionCode, entityType, entityId,
+            oldValuesJson: oldValue, newValuesJson: newValue,
+            ipAddress: _requestContext.IpAddress,
+            deviceInfo: _requestContext.DeviceInfo,
+            actorUserId: _currentUser?.UserId,
+            clock: _clock,
+            shopId: _currentUser?.ShopId));
+        await _db.SaveChangesAsync(ct);
     }
 }
 

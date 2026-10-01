@@ -34,15 +34,15 @@ internal static class BalanceIntegrity
     public static async Task<(long LedgerSum, string? Flag)> ComputeWalletAsync(
         IMoneyRecordDbContext db, long accountId, long cachedBalance, CancellationToken ct)
     {
-        var sums = await db.WalletLedgerEntries.AsNoTracking()
+        // MongoDB EF cannot translate GroupBy over an enum key (g.Key -> ArgumentException
+        // "Property 'LedgerDirection Key' is not defined...") — mirror the client-side
+        // sum pattern used by the cash path above.
+        var rows = await db.WalletLedgerEntries.AsNoTracking()
             .Where(e => e.WalletAccountId == accountId)
-            .GroupBy(e => e.Direction)
-            .Select(g => new { Direction = g.Key, Total = g.Sum(e => e.Amount) })
+            .Select(e => new { e.Direction, e.Amount })
             .ToListAsync(ct);
-        var inc = sums.Where(s => s.Direction == LedgerDirection.Increase)
-            .Select(s => s.Total).FirstOrDefault();
-        var dec = sums.Where(s => s.Direction == LedgerDirection.Decrease)
-            .Select(s => s.Total).FirstOrDefault();
+        var inc = rows.Where(s => s.Direction == LedgerDirection.Increase).Sum(s => s.Amount);
+        var dec = rows.Where(s => s.Direction == LedgerDirection.Decrease).Sum(s => s.Amount);
         var ledgerSum = IntegrityCheck.SignedSum(inc, dec);
         return (ledgerSum, IntegrityCheck.Flag(cachedBalance, ledgerSum));
     }

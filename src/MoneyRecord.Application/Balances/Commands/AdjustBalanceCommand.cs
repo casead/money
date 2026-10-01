@@ -128,7 +128,7 @@ public sealed class AdjustBalanceCommandHandler
     private async Task<Result<AdjustmentResponse>> AdjustCashAsync(
         AdjustBalanceCommand request, LedgerDirection direction, long actorId, CancellationToken ct)
     {
-        var locked = await _locker.LockPhysicalCashAsync(ct);
+        await using var locked = await _locker.LockPhysicalCashAsync(ct);
 
         // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
         await _db.ClearTrackedEntitiesAsync(ct);
@@ -178,7 +178,7 @@ public sealed class AdjustBalanceCommandHandler
         AdjustBalanceCommand request, long accountId, LedgerDirection direction,
         long actorId, CancellationToken ct)
     {
-        var locked = await _locker.LockWalletAccountAsync(accountId, ct);
+        await using var locked = await _locker.LockWalletAccountAsync(accountId, ct);
 
         // Clear change tracker to avoid double-tracking with MongoBalanceLocker.
         await _db.ClearTrackedEntitiesAsync(ct);

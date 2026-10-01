@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MoneyRecord.Application.Balances.Commands;
 using MoneyRecord.Application.Common.Interfaces;
 using MoneyRecord.Application.Common.Models;
+using MoneyRecord.Application.Settings.Commands;
 using MoneyRecord.Application.Transactions.Commands;
 using MoneyRecord.Domain.Common.Exceptions;
 using MoneyRecord.Domain.Entities;
@@ -39,6 +40,16 @@ public class TxnEngineIntegrationTests : IAsyncLifetime
 
         await sender.Send(new AdjustBalanceCommand(
             "cash", null, "INCREASE", OpeningCashTopUp, "opening cash for txn tests", null));
+
+        // Shared DB with the fees suite: reset fee rates so a leftover shop override
+        // (e.g. TC900c's 9%) cannot pollute the zero-fee golden assertions (TC-600a).
+        await sender.Send(new UpdateSettingsCommand(
+            new Dictionary<string, string>
+            {
+                ["feePercentCashIn"] = "0",
+                ["feePercentCashOut"] = "0"
+            },
+            ConfirmSensitive: false));
 
         using var s2 = _fx.CreateScope();
         var db = s2.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
@@ -302,23 +313,31 @@ public class TxnEngineIntegrationTests : IAsyncLifetime
         var okCount = outcomes.Sum();
 
         var (cash, float_) = await ReadBalancesAsync();
-        okCount.Should().Be(ins + outs, "all submissions eventually succeed via retry");
-        cash.Should().Be(_cashBaseline + (ins * amt) - (outs * amt));   // conservation
-        float_.Should().Be(OpeningFloat - (ins * amt) + (outs * amt));
 
         using var assertScope = _fx.CreateScope();
         var db = assertScope.ServiceProvider.GetRequiredService<IMoneyRecordDbContext>();
-        var sums = await db.WalletLedgerEntries.AsNoTracking()
-            .Where(e => e.WalletAccountId == _accountId && e.SourceType == LedgerSourceType.Transaction)
-            .GroupBy(e => e.Direction)
-            .Select(g => new { g.Key, Total = g.Sum(e => e.Amount) })
+        var txnDelta = await db.Transactions.AsNoTracking().CountAsync() - _txnCountBaseline;
+        // Enum-keyed GroupBy is not translatable by the MongoDB EF provider —
+        // project + group client-side (same pattern as the production fix).
+        var entries = await db.WalletLedgerEntries.AsNoTracking()
+            .Where(e => e.WalletAccountId == _accountId)
+            .Select(e => new { e.SourceType, e.Direction, e.Amount })
             .ToListAsync();
-        var inc = sums.FirstOrDefault(s => s.Key == LedgerDirection.Increase)?.Total ?? 0;
-        var dec = sums.FirstOrDefault(s => s.Key == LedgerDirection.Decrease)?.Total ?? 0;
+        var txnEntries = entries.Where(e => e.SourceType == LedgerSourceType.Transaction).ToList();
+        var inc = txnEntries.Where(s => s.Direction == LedgerDirection.Increase).Sum(s => s.Amount);
+        var dec = txnEntries.Where(s => s.Direction == LedgerDirection.Decrease).Sum(s => s.Amount);
+        var diag = $"diag: ok={okCount}, txnDelta={txnDelta}, cash={cash}, float={float_}, " +
+                   $"walletLedgerDelta={inc - dec}";
+
+        okCount.Should().Be(ins + outs, "all submissions eventually succeed via retry — " + diag);
+        cash.Should().Be(_cashBaseline + (ins * amt) - (outs * amt),   // conservation
+            diag);
+        float_.Should().Be(OpeningFloat - (ins * amt) + (outs * amt), diag);
+
         // Engine semantics: Cash In -> wallet Decrease; Cash Out -> wallet Increase.
         // So the transaction-sourced ledger delta must equal the float-cache delta
         // since account creation (OpeningFloat): no drift between ledger and cache.
         (inc - dec).Should().Be(float_ - OpeningFloat,
-            "transaction-ledger delta must equal float-cache delta (no drift)");
+            "transaction-ledger delta must equal float-cache delta (no drift) — " + diag);
     }
 }

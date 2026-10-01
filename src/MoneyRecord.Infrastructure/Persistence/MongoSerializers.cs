@@ -42,6 +42,9 @@ public sealed class DateOnlySerializer : SerializerBase<DateOnly>
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, DateOnly value)
     {
         var utcDateTime = new DateTime(value.Year, value.Month, value.Day, 0, 0, 0, DateTimeKind.Utc);
-        context.Writer.WriteDateTime(utcDateTime.Ticks);
+        // BSON DateTime stores MILLISECONDS since Unix epoch. Writing .Ticks (100ns
+        // units) yields values ~10,000x too large -> deserialization throws
+        // ArgumentOutOfRangeException (BsonDateTime out of range).
+        context.Writer.WriteDateTime((long)(utcDateTime - DateTime.UnixEpoch).TotalMilliseconds);
     }
 }

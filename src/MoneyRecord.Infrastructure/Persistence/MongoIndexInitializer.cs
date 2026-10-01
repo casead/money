@@ -108,6 +108,19 @@ public static class MongoIndexInitializer
                 Builders<AuditLog>.IndexKeys.Ascending(a => a.ShopId),
                 Builders<AuditLog>.IndexKeys.Ascending(a => a.CreatedAtUtc)),
             new CreateIndexOptions { Name = "IX_AuditLogs_ShopId_CreatedAt" }));
+        // Audit retention (TTL): logging stays ON (security/compliance trail —
+        // cancel/reverse, auth events, settings), but rows older than 180 days are
+        // purged automatically so the collection cannot outgrow the Atlas tier —
+        // space is bounded WITHOUT disabling the trail. To change the window,
+        // drop IX_AuditLogs_CreatedAt_TTL first (same-name index with different
+        // options = IndexOptionsConflict).
+        await auditLogs.Indexes.CreateOneAsync(new CreateIndexModel<AuditLog>(
+            Builders<AuditLog>.IndexKeys.Ascending(a => a.CreatedAtUtc),
+            new CreateIndexOptions
+            {
+                Name = "IX_AuditLogs_CreatedAt_TTL",
+                ExpireAfter = TimeSpan.FromDays(180)
+            }));
 
         // WalletLedgerEntries indexes
         var walletLedger = database.GetCollection<WalletLedgerEntry>("walletLedgerEntries");
@@ -177,6 +190,38 @@ public static class MongoIndexInitializer
         // Counters collection (for TxnNumberGenerator) — _id is already unique in MongoDB
         var counters = database.GetCollection<MongoTxnNumberGenerator.CounterDocument>("counters");
 
+        // Seed rows carry fixed ids the value generators never saw (appSettings 1-10,
+        // walletProviders 1-2): a fresh DB starts counters at 0, so the first
+        // shop-override/provider insert would E11000-duplicate the seeded _id.
+        await SyncCounterAsync(database, "appSettings", "AppSetting_id");
+        await SyncCounterAsync(database, "walletProviders", "WalletProvider_id");
+
         Console.WriteLine("[MongoDB] Indexes created successfully.");
+    }
+
+    /// <summary>Raises a generator counter to the collection's current max _id (never lowers it).</summary>
+    private static async Task SyncCounterAsync(IMongoDatabase database,
+        string collectionName, string counterName)
+    {
+        var docs = database.GetCollection<MongoDB.Bson.BsonDocument>(collectionName);
+        var top = await docs.Find(Builders<MongoDB.Bson.BsonDocument>.Filter.Empty)
+            .SortByDescending(d => d["_id"])
+            .Limit(1)
+            .FirstOrDefaultAsync();
+        if (top is null || !top["_id"].IsNumeric)
+            return;
+
+        long maxId = top["_id"] is MongoDB.Bson.BsonInt32 i32 ? i32.Value : top["_id"].AsInt64;
+
+        var counters = database.GetCollection<MongoDB.Bson.BsonDocument>("counters");
+        var filter = Builders<MongoDB.Bson.BsonDocument>.Filter.Eq("_id", counterName);
+        var current = await counters.Find(filter).FirstOrDefaultAsync();
+        var seq = current is not null && current.TryGetValue("seq", out var s) ? s.ToInt64() : 0L;
+        if (maxId <= seq)
+            return;
+
+        await counters.UpdateOneAsync(filter,
+            Builders<MongoDB.Bson.BsonDocument>.Update.Set("seq", maxId),
+            new UpdateOptions { IsUpsert = true });
     }
 }

@@ -87,9 +87,9 @@ public sealed class CancelTransactionCommandHandler
                 new Dictionary<string, object?> { ["reason"] = "USE_REVERSAL" });
 
         // ---- EC-03: UPDLOCK the txn row → fresh read under lock → terminal guard ----
-        var lockedId = await LockTransactionRowAsync(txn.Id, ct);
+        await using var lockedRow = await LockTransactionRowAsync(txn.Id, ct);
         await _db.ClearTrackedEntitiesAsync(ct);
-        var current = await _db.Transactions.FirstAsync(t => t.Id == lockedId, ct);
+        var current = await _db.Transactions.FirstAsync(t => t.Id == lockedRow.Id, ct);
         if (!current.IsCompleted)
             throw new ConflictStateException(
                 $"TXN {current.TxnNo} သည် terminal state ({current.Status}) ဖြစ်နေပြီး ပြောင်းလို့မရပါ။");
@@ -106,10 +106,9 @@ public sealed class CancelTransactionCommandHandler
         var feeOnWallet = current.FeeAmount > 0 &&
                           current.FeePaidVia == FeePaidVia.WalletFloat;
 
-        LockedCashBalance lockCash;
-        LockedWalletBalance lockWallet;
-        lockCash = await _locker.LockPhysicalCashAsync(ct);
-        lockWallet = await _locker.LockWalletAccountAsync(current.WalletAccountId, ct);
+        await using var lockCash = await _locker.LockPhysicalCashAsync(ct);
+        await using var lockWallet =
+            await _locker.LockWalletAccountAsync(current.WalletAccountId, ct);
 
         await _db.ClearTrackedEntitiesAsync(ct);
         var trackedWallet = await _db.WalletAccounts
@@ -130,11 +129,13 @@ public sealed class CancelTransactionCommandHandler
         if (!cashDecreases && current.Amount + (feeOnWallet ? current.FeeAmount : 0)
                 > trackedWallet.CurrentFloatBalance)
             throw new InsufficientFloatException(trackedWallet.CurrentFloatBalance);
-
         // ---- Terminal flip + compensating cache/ledger writes — one atomic
         //      business transaction (TxBehavior commit/rollback covers all). ----
         current.MarkCancelled(actorId, request.Reason, _clock.UtcNow);
-        _db.Entry(current).Property(t => t.Status).IsModified = true;
+        // `current` was detached by ClearTrackedEntitiesAsync above — marking ONLY
+        // Status would silently drop CancellationReason/CancelledAtUtc/CancelledBy.
+        // Re-attach the whole row as modified (balance-row locks are held).
+        _db.Entry(current).State = EntityState.Modified;
 
         trackedCash.ApplyAdjustment(
             cashDecreases ? LedgerDirection.Decrease : LedgerDirection.Increase,
@@ -211,7 +212,7 @@ public sealed class CancelTransactionCommandHandler
     }
 
     /// <summary>Raw-SQL UPDLOCK via IBalanceLocker (EC-03); SQL 1222 → LOCK_TIMEOUT.</summary>
-    private Task<long> LockTransactionRowAsync(long txnId, CancellationToken ct) =>
+    private Task<LockedTransactionRow> LockTransactionRowAsync(long txnId, CancellationToken ct) =>
         _locker.LockTransactionRowAsync(txnId, ct);
 }
 
@@ -296,9 +297,9 @@ public sealed class ReverseTransactionCommandHandler
 
         // ---- EC-03: lock txn row → fresh read → terminal guard. This also blocks
         //      reversal-of-reversal (BR-027): REVERSED/CANCELLED are terminal. ----
-        var lockedId = await LockTransactionRowAsync(original.Id, ct);
+        await using var lockedRow = await LockTransactionRowAsync(original.Id, ct);
         await _db.ClearTrackedEntitiesAsync(ct);
-        var current = await _db.Transactions.FirstAsync(t => t.Id == lockedId, ct);
+        var current = await _db.Transactions.FirstAsync(t => t.Id == lockedRow.Id, ct);
         if (!current.IsCompleted)
             throw new ConflictStateException(
                 $"TXN {current.TxnNo} သည် terminal state ({current.Status}) ဖြစ်နေပြီး ပြောင်းလို့မရပါ။");
@@ -312,10 +313,9 @@ public sealed class ReverseTransactionCommandHandler
 
         // Balance-row locks in the global uniform order (cash → wallet) —
         // mirror-type-dependent ordering would reintroduce the AB-BA cycle.
-        LockedCashBalance lockCash;
-        LockedWalletBalance lockWallet;
-        lockCash = await _locker.LockPhysicalCashAsync(ct);
-        lockWallet = await _locker.LockWalletAccountAsync(current.WalletAccountId, ct);
+        await using var lockCash = await _locker.LockPhysicalCashAsync(ct);
+        await using var lockWallet =
+            await _locker.LockWalletAccountAsync(current.WalletAccountId, ct);
 
         await _db.ClearTrackedEntitiesAsync(ct);
         var trackedWallet = await _db.WalletAccounts
@@ -407,7 +407,9 @@ public sealed class ReverseTransactionCommandHandler
                 _clock.UtcNow));
 
         current.MarkReversed(actorId, request.Reason, _clock.UtcNow, mirrorTxnId: mirror.Id);
-        _db.Entry(current).Property(t => t.Status).IsModified = true;
+        // Same detach issue as cancel: persist the WHOLE row (status + reversal
+        // reason/timestamps/link), not just Status.
+        _db.Entry(current).State = EntityState.Modified;
         _db.TransactionReversals.Add(TransactionReversal.Create(
             current.Id, mirror.Id, request.Reason, actorId, _clock.UtcNow));
 
@@ -444,6 +446,6 @@ public sealed class ReverseTransactionCommandHandler
         return Result<ReverseTxnResponse>.Success(response);
     }
 
-    private Task<long> LockTransactionRowAsync(long txnId, CancellationToken ct) =>
+    private Task<LockedTransactionRow> LockTransactionRowAsync(long txnId, CancellationToken ct) =>
         _locker.LockTransactionRowAsync(txnId, ct);
 }
