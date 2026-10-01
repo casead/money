@@ -58,4 +58,12 @@ public static class UserManagementRules
     public static bool IsLastActiveAdmin(int activeAdminCountExcludingTarget, int targetRoleId) =>
         targetRoleId == Common.Rbac.RolePermissionRegistry.AdminRoleId &&
         activeAdminCountExcludingTarget == 0;
+
+    /// <summary>
+    /// M11 tenant guard: a shop-scoped actor (ShopId set) may only manage users of their
+    /// own shop; SuperAdmin (ShopId null) is unrestricted. Target platform accounts
+    /// (ShopId null) are off-limits to shop actors — they are not their staff.
+    /// </summary>
+    public static bool IsCrossTenant(long? actorShopId, long? targetShopId) =>
+        actorShopId is { } own && targetShopId != own;
 }

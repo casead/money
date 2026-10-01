@@ -43,6 +43,11 @@ public sealed class SetUserStatusCommandHandler : IRequestHandler<SetUserStatusC
         if (user is null)
             return Result<UserStatusResponse>.Failure(ErrorCodes.NotFound, "User ရှာမတွေ့ပါ။");
 
+        // M11 tenant guard: shop admins act on own-shop users only.
+        if (UserManagementRules.IsCrossTenant(_currentUser.ShopId, user.ShopId))
+            return Result<UserStatusResponse>.Failure(ErrorCodes.Forbidden,
+                "သင့်ဆိုင်နှင့် မသက်ဆိုင်သော User ဖြစ်ပါသည် — စီမံခွင့်မရှိပါ။");
+
         var deactivating = !request.IsActive;
 
         if (deactivating && user.IsActive)

@@ -46,6 +46,11 @@ public sealed class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand
         if (user is null)
             return Result<UserDetailResponse>.Failure(ErrorCodes.NotFound, "User ရှာမတွေ့ပါ။");
 
+        // M11 tenant guard: shop admins act on own-shop users only.
+        if (UserManagementRules.IsCrossTenant(_currentUser.ShopId, user.ShopId))
+            return Result<UserDetailResponse>.Failure(ErrorCodes.Forbidden,
+                "သင့်ဆိုင်နှင့် မသက်ဆိုင်သော User ဖြစ်ပါသည် — စီမံခွင့်မရှိပါ။");
+
         var roleBefore = await _db.Roles.FindAsync(user.RoleId);
 
         // ---- Role change path ----

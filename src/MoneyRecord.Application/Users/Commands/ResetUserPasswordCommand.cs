@@ -53,6 +53,12 @@ public sealed class ResetUserPasswordCommandHandler
         if (user is null)
             return Result<Unit>.Failure(ErrorCodes.NotFound, "User ရှာမတွေ့ပါ။");
 
+        // M11 tenant guard: password reset is the highest-impact account action —
+        // shop admins reset own-shop passwords only.
+        if (UserManagementRules.IsCrossTenant(_currentUser.ShopId, user.ShopId))
+            return Result<Unit>.Failure(ErrorCodes.Forbidden,
+                "သင့်ဆိုင်နှင့် မသက်ဆိုင်သော User ဖြစ်ပါသည် — စီမံခွင့်မရှိပါ။");
+
         user.SetPassword(_hasher.Hash(request.NewPassword), actorId, _clock);
 
         // Target must re-login on every device with the new credential.
